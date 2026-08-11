@@ -1,0 +1,14 @@
+.build/
+.swiftpm/
+.DS_Store
+
+# Generated timecode audio — regenerate with `ltcplay`, never commit.
+# A 20-minute file is ~110 MB.
+*.wav
+
+# Private working notes: specific equipment, purchase decisions, running todo.
+# Not for the public history.
+NOTES.md
+DerivedData/
+*.xcuserstate
+xcuserdata/

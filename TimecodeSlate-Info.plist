@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Without this, iOS caps third-party apps at 60 Hz on ProMotion
+	     displays regardless of what CADisplayLink asks for. The slate needs
+	     the full 120 Hz so timecode digit changes land within 8.3 ms of the
+	     true frame boundary rather than 16.7 ms. There is no
+	     INFOPLIST_KEY_ build setting for this key, which is why this
+	     partial plist exists at all. -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+</dict>
+</plist>
