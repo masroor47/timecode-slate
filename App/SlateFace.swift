@@ -47,11 +47,17 @@ struct SlateFace: View {
     @FocusState private var editing: Bool
 
     // Row budget, in percent of height. Must sum to 100.
-    private let sticksRow: CGFloat = 15
+    //
+    // Turning the scene/shot/take labels vertical is what paid for the bigger
+    // sticks: a horizontal label costs a line of height in every cell, and
+    // three cells' worth of that adds up. Stood on end, the label costs a few
+    // percent of *width* — which this face has to spare — and hands the whole
+    // cell height back to the value.
+    private let sticksRow: CGFloat = 20
     private let metaRow:   CGFloat = 12
-    private let tcRow:     CGFloat = 30
-    private let takeRow:   CGFloat = 26
-    private let footRow:   CGFloat = 17
+    private let tcRow:     CGFloat = 28
+    private let takeRow:   CGFloat = 27
+    private let footRow:   CGFloat = 13
 
     var body: some View {
         GeometryReader { geo in
@@ -112,42 +118,89 @@ struct SlateFace: View {
     }
 
     private func timecode(u: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0.6 * u) {
+        VStack(spacing: 0.4 * u) {
             label(showingUserBits ? "User bits" : "Timecode · \(model.rate.displayName)", u: u)
             Text(showingUserBits ? model.userBitsDisplay : model.displayTimecode)
-                .font(.system(size: 19 * u, weight: .bold, design: .monospaced))
+                .font(.system(size: 23 * u, weight: .bold, design: .monospaced))
                 .monospacedDigit()
                 .minimumScaleFactor(0.4)
                 .lineLimit(1)
                 .foregroundStyle(timecodeColor)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 3 * u)
-        .padding(.vertical, 1.2 * u)
+        .padding(.vertical, 1 * u)
     }
 
     private func take(u: CGFloat) -> some View {
         HStack(spacing: 0) {
-            editable("Scene", text: $model.info.scene, size: 14 * u, u: u)
+            cell("Scene", u: u) {
+                slateField(text: $model.info.scene, u: u)
+            }
             vRule(u)
-            editable("Shot", text: $model.info.shot, size: 14 * u, u: u)
+            cell("Shot", u: u) {
+                slateField(text: $model.info.shot, u: u)
+            }
             vRule(u)
             // Take is stepped rather than typed: it advances far more often
-            // than it is set, and typing a number on set wastes a hand.
-            VStack(alignment: .leading, spacing: 0.8 * u) {
-                label("Take", u: u)
+            // than it is set, and typing a number on set wastes a hand. The
+            // steppers run the full height of the cell for the same reason —
+            // they are pressed constantly, often without looking.
+            cell("Take", u: u) {
                 HStack(spacing: 1.5 * u) {
                     Text("\(model.info.take)")
-                        .font(.system(size: 14 * u, weight: .bold))
+                        .font(.system(size: 20 * u, weight: .bold))
                         .lineLimit(1)
-                    Spacer(minLength: 0)
-                    stepper("minus", u: u) { model.info.take = max(1, model.info.take - 1) }
-                    stepper("plus", u: u) { model.info.take += 1 }
+                        .minimumScaleFactor(0.4)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    VStack(spacing: 0.8 * u) {
+                        stepper("plus", u: u) { model.info.take += 1 }
+                        stepper("minus", u: u) { model.info.take = max(1, model.info.take - 1) }
+                    }
+                    .padding(.vertical, 1.2 * u)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 3 * u)
         }
+    }
+
+    /// A ruled cell with its label stood on end down the left edge, so the
+    /// value gets the cell's full height rather than sharing it with a caption.
+    private func cell<Content: View>(_ title: String, u: CGFloat,
+                                     @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 1.5 * u) {
+            verticalLabel(title, u: u)
+            content()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.trailing, 2 * u)
+    }
+
+    private func verticalLabel(_ text: String, u: CGFloat) -> some View {
+        Text(text.uppercased())
+            .font(.system(size: 3 * u, weight: .semibold))
+            .tracking(3 * u * 0.18)
+            .foregroundStyle(Self.inkFaint)
+            // Rotation does not change a view's layout size, so the text is
+            // fixed at its natural width first and then given a frame with the
+            // rotated dimensions.
+            .fixedSize()
+            .rotationEffect(.degrees(-90))
+            .frame(width: 5 * u)
+            .frame(maxHeight: .infinity)
+            .padding(.leading, 1.2 * u)
+    }
+
+    private func slateField(text: Binding<String>, u: CGFloat) -> some View {
+        TextField("", text: text)
+            .textFieldStyle(.plain)
+            .font(.system(size: 20 * u, weight: .bold))
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.characters)
+            .lineLimit(1)
+            .minimumScaleFactor(0.4)
+            .focused($editing)
+            .submitLabel(.done)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
     private func meta(u: CGFloat) -> some View {
@@ -221,8 +274,10 @@ struct SlateFace: View {
 
             Button(action: onSettings) {
                 Image(systemName: "gearshape.fill")
-                    .font(.system(size: 4 * u))
+                    .font(.system(size: 6 * u))
                     .foregroundStyle(Self.inkSoft)
+                    .frame(width: 10 * u, height: 10 * u)
+                    .contentShape(Rectangle())
             }
         }
         .padding(.horizontal, 3 * u)
@@ -253,29 +308,14 @@ struct SlateFace: View {
         .padding(.horizontal, 3 * u)
     }
 
-    private func editable(_ title: String, text: Binding<String>,
-                          size: CGFloat, u: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0.8 * u) {
-            label(title, u: u)
-            TextField("", text: text)
-                .textFieldStyle(.plain)
-                .font(.system(size: size, weight: .bold))
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.characters)
-                .lineLimit(1)
-                .focused($editing)
-                .submitLabel(.done)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 3 * u)
-    }
-
     private func stepper(_ symbol: String, u: CGFloat, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 3.4 * u, weight: .bold))
+                .font(.system(size: 4.2 * u, weight: .bold))
                 .foregroundStyle(Self.ink)
-                .frame(width: 8 * u, height: 6 * u)
+                .frame(width: 12 * u)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
                 .background(RoundedRectangle(cornerRadius: 1 * u)
                     .stroke(Self.ink, lineWidth: max(1, 0.3 * u)))
         }
