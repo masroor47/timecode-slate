@@ -13,6 +13,43 @@ struct SlateView: View {
     @FocusState private var editingField: Bool
 
     var body: some View {
+        SlateFace(
+            model: model,
+            onTapSticks: { if model.isHolding { model.releaseHold() } else { model.clap() } },
+            onJam: { model.armJam() },
+            onNextShot: { model.advanceShot() },
+            onSettings: { showSettings = true },
+            onDiagnostics: {
+                model.refreshDiagnostics()
+                showDiagnostics = true
+            }
+        )
+        // Nothing on this slate may ease, fade or interpolate. SwiftUI will
+        // happily cross-fade a colour change over ~250 ms, which at 24 fps
+        // smears the sync mark across six frames and lands it visibly after the
+        // freeze it is meant to mark. Killing the transaction outright is more
+        // reliable than exempting each value individually.
+        .transaction { $0.animation = nil }
+        .preferredColorScheme(.light)
+        .statusBarHidden()
+        .persistentSystemOverlays(.hidden)
+        .onAppear {
+            // A slate that blanks itself between takes is worse than no slate.
+            UIApplication.shared.isIdleTimerDisabled = true
+            // Note we do *not* start listening here. The microphone only runs
+            // between arming a jam and getting one.
+        }
+        .onDisappear {
+            UIApplication.shared.isIdleTimerDisabled = false
+            model.stopListening()
+        }
+        .sheet(isPresented: $showSettings) { settingsSheet }
+        .sheet(isPresented: $showDiagnostics) { diagnosticsSheet }
+    }
+
+    /// The previous dark layout, kept only until the new face has been used on
+    /// a real shoot. Delete once it has.
+    private var legacyBody: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
