@@ -8,7 +8,8 @@ import SwiftUI
 /// unmistakable in a single frame, which is exactly what an editor is looking
 /// for when scrubbing for the sync point.
 struct ClapperBar: View {
-    /// Stripes lean right on the hinged arm, left on the fixed bar.
+    /// Which way the stripes lean. `ClapperSticks` pairs them so the apex
+    /// lands on the right.
     var leaning: Leaning = .right
     var stripeWidth: CGFloat = 34
 
@@ -63,12 +64,16 @@ struct ClapperSticks: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ClapperBar(leaning: .right)
+            // The hinged arm leans left and the fixed bar right, so the stripe
+            // is at its *rightmost* where the two meet: the chevrons point
+            // right, as they do on a real slate. Swapping these puts the apex
+            // on the left, which reads as an arrow aimed the wrong way.
+            ClapperBar(leaning: .left)
                 .frame(height: barHeight)
                 .rotationEffect(.degrees(isClosed ? 0 : -openAngle),
                                 anchor: .bottomLeading)
 
-            ClapperBar(leaning: .left)
+            ClapperBar(leaning: .right)
                 .frame(height: barHeight)
         }
     }

@@ -1,20 +1,40 @@
 import SwiftUI
 import SlateCore
 
+/// Where the production metadata sits relative to the timecode.
+///
+/// Both put timecode above scene/shot/take — that ordering is settled. What is
+/// not settled is whether the production block reads as a header above the
+/// timecode or as a footer below the take line, and that is a judgement about
+/// what someone glances at first, not something to reason out in the abstract.
+enum SlateLayout: String, CaseIterable, Identifiable {
+    case metaTop
+    case metaBottom
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .metaTop:    return "Production on top"
+        case .metaBottom: return "Timecode on top"
+        }
+    }
+}
+
 /// The slate face: white acrylic, ruled fields, red timecode — a real insert
 /// slate rather than an app that happens to show timecode.
 ///
 /// **Everything is sized against the height, not the width.** The phone in
 /// landscape is roughly 2.17:1, so height is the binding constraint and always
-/// runs out first. Sizing type as a fraction of width overflows the bottom
-/// long before it overflows the sides, which is exactly how the first draft of
-/// this layout went wrong. The `u` unit below is one percent of the available
-/// height, and every row is budgeted so the rows sum to 100.
+/// runs out first. Sizing type as a fraction of width overflows the bottom long
+/// before it overflows the sides, which is exactly how the first draft of this
+/// layout went wrong. The `u` unit below is one percent of the available
+/// height, and the row budget sums to 100.
 ///
 /// Contains no animation, for the same reason as `ClapperSticks` — see the
 /// comment there. The sync frame must be one frame, not a transition.
 struct SlateFace: View {
     @ObservedObject var model: SlateViewModel
+    var layout: SlateLayout
     var onTapSticks: () -> Void
     var onJam: () -> Void
     var onNextShot: () -> Void
@@ -27,31 +47,36 @@ struct SlateFace: View {
     @FocusState private var editing: Bool
 
     // Row budget, in percent of height. Must sum to 100.
-    private let sticksRow: CGFloat = 17
-    private let tcRow: CGFloat = 41
-    private let takeRow: CGFloat = 25
-    private let footRow: CGFloat = 17
+    private let sticksRow: CGFloat = 15
+    private let metaRow:   CGFloat = 12
+    private let tcRow:     CGFloat = 30
+    private let takeRow:   CGFloat = 26
+    private let footRow:   CGFloat = 17
 
     var body: some View {
         GeometryReader { geo in
-            let u = geo.size.height / 100      // one percent of height
+            let u = geo.size.height / 100
             let rule = max(1, 0.5 * u)
 
             VStack(spacing: 0) {
-                ClapperSticks(isClosed: !model.isClapPending, barHeight: 7.5 * u)
-                    .frame(height: sticksRow * u)
-                    .clipped()
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: onTapSticks)
-                    .animation(nil, value: model.isClapPending)
-                    .accessibilityLabel(model.isHolding ? "Resume" : "Clap")
-                    .accessibilityAddTraits(.isButton)
+                sticks(u: u)
 
-                timecodeRow(u: u).frame(height: tcRow * u)
+                if layout == .metaTop {
+                    meta(u: u).frame(height: metaRow * u)
+                    divider(rule)
+                }
+
+                timecode(u: u).frame(height: tcRow * u)
                 divider(rule)
-                takeRow(u: u).frame(height: takeRow * u)
+                take(u: u).frame(height: takeRow * u)
                 divider(rule)
-                footRow(u: u).frame(height: footRow * u)
+
+                if layout == .metaBottom {
+                    meta(u: u).frame(height: metaRow * u)
+                    divider(rule)
+                }
+
+                foot(u: u).frame(height: footRow * u)
             }
             .background(faceColor)
             .foregroundStyle(Self.ink)
@@ -71,29 +96,44 @@ struct SlateFace: View {
 
     // MARK: - Rows
 
-    private func timecodeRow(u: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0.8 * u) {
+    /// Full-bleed, unlike everything else: on a real slate the sticks run the
+    /// whole width of the board, and inset chevrons look like a screenshot of a
+    /// slate rather than a slate.
+    private func sticks(u: CGFloat) -> some View {
+        ClapperSticks(isClosed: !model.isClapPending, barHeight: 6.6 * u)
+            .frame(height: sticksRow * u)
+            .clipped()
+            .padding(.horizontal, -60)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onTapSticks)
+            .animation(nil, value: model.isClapPending)
+            .accessibilityLabel(model.isHolding ? "Resume" : "Clap")
+            .accessibilityAddTraits(.isButton)
+    }
+
+    private func timecode(u: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0.6 * u) {
             label(showingUserBits ? "User bits" : "Timecode · \(model.rate.displayName)", u: u)
             Text(showingUserBits ? model.userBitsDisplay : model.displayTimecode)
-                .font(.system(size: 25 * u, weight: .bold, design: .monospaced))
+                .font(.system(size: 19 * u, weight: .bold, design: .monospaced))
                 .monospacedDigit()
-                .minimumScaleFactor(0.5)
+                .minimumScaleFactor(0.4)
                 .lineLimit(1)
                 .foregroundStyle(timecodeColor)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 3 * u)
-        .padding(.vertical, 1.5 * u)
+        .padding(.vertical, 1.2 * u)
     }
 
-    private func takeRow(u: CGFloat) -> some View {
+    private func take(u: CGFloat) -> some View {
         HStack(spacing: 0) {
-            editable("Scene", text: $model.info.scene, u: u)
+            editable("Scene", text: $model.info.scene, size: 14 * u, u: u)
             vRule(u)
-            editable("Shot", text: $model.info.shot, u: u)
+            editable("Shot", text: $model.info.shot, size: 14 * u, u: u)
             vRule(u)
             // Take is stepped rather than typed: it advances far more often
-            // than it is set, and typing a number on set is a waste of a hand.
+            // than it is set, and typing a number on set wastes a hand.
             VStack(alignment: .leading, spacing: 0.8 * u) {
                 label("Take", u: u)
                 HStack(spacing: 1.5 * u) {
@@ -110,20 +150,30 @@ struct SlateFace: View {
         }
     }
 
-    private func footRow(u: CGFloat) -> some View {
+    private func meta(u: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            readout("Production", model.info.production, u: u)
+            vRule(u)
+            readout("Director", model.info.director, u: u)
+            vRule(u)
+            readout("Camera", model.info.cinematographer, u: u)
+        }
+    }
+
+    private func foot(u: CGFloat) -> some View {
         HStack(spacing: 3 * u) {
-            VStack(alignment: .leading, spacing: 0.6 * u) {
-                label("Production", u: u)
-                Text(model.info.production.isEmpty ? "—" : model.info.production)
-                    .font(.system(size: 5.5 * u, weight: .bold))
+            VStack(alignment: .leading, spacing: 0.5 * u) {
+                label("Roll", u: u)
+                Text(display(model.info.roll))
+                    .font(.system(size: 5 * u, weight: .bold))
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 0.6 * u) {
-                label("Roll", u: u)
-                Text(model.info.roll.isEmpty ? "—" : model.info.roll)
-                    .font(.system(size: 5.5 * u, weight: .bold))
+            VStack(alignment: .leading, spacing: 0.5 * u) {
+                label("Sound", u: u)
+                Text(display(model.info.soundRoll))
+                    .font(.system(size: 5 * u, weight: .bold))
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -132,12 +182,15 @@ struct SlateFace: View {
 
             Spacer(minLength: 0)
 
+            // Status is an indicator, not a sentence — it truncated as prose,
+            // and the detail belongs on the diagnostics sheet behind it anyway.
             Button(action: onDiagnostics) {
-                HStack(spacing: 0.8 * u) {
+                HStack(spacing: 0.9 * u) {
                     Circle().fill(model.status.color).frame(width: 2.4 * u, height: 2.4 * u)
-                    Text(model.status.label)
-                        .font(.system(size: 3.2 * u, weight: .semibold, design: .monospaced))
+                    Text(model.inputName)
+                        .font(.system(size: 3 * u, weight: .semibold, design: .monospaced))
                         .lineLimit(1)
+                        .fixedSize()
                 }
                 .foregroundStyle(Self.inkSoft)
             }
@@ -146,9 +199,10 @@ struct SlateFace: View {
                 Text(model.isArmedForJam ? "CANCEL" : "JAM")
                     .font(.system(size: 3.4 * u, weight: .bold))
                     .tracking(1.2)
+                    .fixedSize()
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 3 * u)
-                    .padding(.vertical, 1.6 * u)
+                    .padding(.horizontal, 2.6 * u)
+                    .padding(.vertical, 1.5 * u)
                     .background(RoundedRectangle(cornerRadius: 1.2 * u)
                         .fill(model.isArmedForJam ? Self.amber : Self.blue))
             }
@@ -157,9 +211,10 @@ struct SlateFace: View {
                 Text("NEXT")
                     .font(.system(size: 3.4 * u, weight: .bold))
                     .tracking(1.2)
+                    .fixedSize()
                     .foregroundStyle(Self.ink)
-                    .padding(.horizontal, 3 * u)
-                    .padding(.vertical, 1.6 * u)
+                    .padding(.horizontal, 2.6 * u)
+                    .padding(.vertical, 1.5 * u)
                     .background(RoundedRectangle(cornerRadius: 1.2 * u)
                         .stroke(Self.ink, lineWidth: max(1, 0.35 * u)))
             }
@@ -175,20 +230,36 @@ struct SlateFace: View {
 
     // MARK: - Pieces
 
+    private func display(_ s: String) -> String { s.isEmpty ? "—" : s }
+
     private func label(_ text: String, u: CGFloat) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 2.9 * u, weight: .semibold))
-            .tracking(2.9 * u * 0.16)
+            .font(.system(size: 2.8 * u, weight: .semibold))
+            .tracking(2.8 * u * 0.16)
             .foregroundStyle(Self.inkFaint)
             .lineLimit(1)
+            .fixedSize()
     }
 
-    private func editable(_ title: String, text: Binding<String>, u: CGFloat) -> some View {
+    private func readout(_ title: String, _ value: String, u: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0.5 * u) {
+            label(title, u: u)
+            Text(display(value))
+                .font(.system(size: 5.4 * u, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 3 * u)
+    }
+
+    private func editable(_ title: String, text: Binding<String>,
+                          size: CGFloat, u: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 0.8 * u) {
             label(title, u: u)
             TextField("", text: text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 14 * u, weight: .bold))
+                .font(.system(size: size, weight: .bold))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.characters)
                 .lineLimit(1)
@@ -211,7 +282,7 @@ struct SlateFace: View {
     }
 
     private func ticks(u: CGFloat) -> some View {
-        HStack(spacing: 2 * u) {
+        HStack(spacing: 1.8 * u) {
             tick("INT", on: model.info.isInterior, u: u)
             tick("EXT", on: !model.info.isInterior, u: u)
             tick("DAY", on: model.info.isDay, u: u)

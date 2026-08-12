@@ -7,6 +7,10 @@ struct SlateView: View {
     @StateObject private var model = SlateViewModel()
     @State private var showSettings = false
     @State private var showDiagnostics = false
+    /// Which face to draw. Persisted so it survives a relaunch, and settable
+    /// from Settings, because this is a judgement to make by looking at it on
+    /// the phone rather than by reasoning about it.
+    @AppStorage("slateLayout") private var slateLayout: SlateLayout = .metaTop
     /// Drives the keyboard's Done button. Without it the only way out of a
     /// slate field is the return key, which is a poor thing to hunt for with
     /// a camera waiting.
@@ -15,6 +19,7 @@ struct SlateView: View {
     var body: some View {
         SlateFace(
             model: model,
+            layout: slateLayout,
             onTapSticks: { if model.isHolding { model.releaseHold() } else { model.clap() } },
             onJam: { model.armJam() },
             onNextShot: { model.advanceShot() },
@@ -338,6 +343,19 @@ struct SlateView: View {
                            + "Turn auto-detect off to set it by hand."
                          : "Pin this to the project rate when you know it — "
                            + "the decoder will not have to infer it.")
+                }
+                Section {
+                    Picker("Layout", selection: $slateLayout) {
+                        ForEach(SlateLayout.allCases) { l in
+                            Text(l.displayName).tag(l)
+                        }
+                    }
+                } header: {
+                    Text("Slate")
+                } footer: {
+                    Text("Both put the timecode above scene, shot and take. "
+                         + "This is only whether the production block reads as "
+                         + "a header or a footer.")
                 }
                 Section {
                     Toggle("Audible clap", isOn: $model.clapSoundEnabled)
