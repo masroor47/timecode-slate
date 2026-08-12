@@ -32,13 +32,12 @@ struct SlateView: View {
                 showDiagnostics = true
             }
         )
-        // Nothing on this slate may ease, fade or interpolate. SwiftUI will
-        // happily cross-fade a colour change over ~250 ms, which at 24 fps
-        // smears the sync mark across six frames and lands it visibly after the
-        // freeze it is meant to mark. Killing the transaction outright is more
-        // reliable than exempting each value individually.
-        .transaction { $0.animation = nil }
-        .preferredColorScheme(.light)
+        // NB the animation-killing transaction lives *inside* SlateFace, not
+        // here. Applied at this level it also reached the sheets below, and a
+        // Picker's menu needs an animated presentation to appear at all — the
+        // frame rate picker looked permanently unselectable because its menu
+        // was being suppressed rather than because it was disabled.
+        .preferredColorScheme(nightMode ? .dark : .light)
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .onAppear {

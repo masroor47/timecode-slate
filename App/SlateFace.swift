@@ -102,11 +102,15 @@ struct SlateFace: View {
     // a horizontal label costs a line of height in every cell, and three cells'
     // worth adds up. Stood on end, a label costs a few percent of *width* —
     // which this face has to spare — and hands the cell height to the value.
-    private let sticksRow: CGFloat = 26
+    /// Breathing room above the sticks. A clapper's arm does not start at the
+    /// very top edge of the board, and butting it against the bezel made the
+    /// slate feel like it was overflowing the phone.
+    private let topGap:    CGFloat = 3
+    private let sticksRow: CGFloat = 22
     private let tcRow:     CGFloat = 23
     private let takeRow:   CGFloat = 30
     private let metaRow:   CGFloat = 10
-    private let footRow:   CGFloat = 11
+    private let footRow:   CGFloat = 12
 
     private var p: SlatePalette { night ? .night : .day }
 
@@ -132,6 +136,7 @@ struct SlateFace: View {
             let u = (geo.size.height + growTop + growBottom - rule * 3) / 100
 
             VStack(spacing: 0) {
+                Color.clear.frame(height: topGap * u)
                 sticks(u: u, bleedLeading: insets.leading, bleedTrailing: insets.trailing)
 
                 if layout == .metaTop {
@@ -154,6 +159,15 @@ struct SlateFace: View {
             .padding(.top, -growTop)
             .padding(.bottom, -growBottom)
             .foregroundStyle(inkColor)
+            // Nothing on this slate may ease, fade or interpolate. SwiftUI will
+            // happily cross-fade a colour change over ~250 ms, which at 24 fps
+            // smears the sync mark across six frames and lands it visibly after
+            // the freeze it is meant to mark.
+            //
+            // Scoped to the slate itself rather than applied further up: at the
+            // top level it also reached the settings and diagnostics sheets, and
+            // suppressed the Picker menus they depend on.
+            .transaction { $0.animation = nil }
         }
         .background(faceColor.ignoresSafeArea())
         .toolbar {
