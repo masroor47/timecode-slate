@@ -22,9 +22,26 @@ struct SlateView: View {
                 // .onChange would cost a second render pass, which could put
                 // the sticks a frame behind the colour change — and the whole
                 // point is that they are the same frame.
-                ClapperSticks(isClosed: model.isHolding)
+                // The sticks are the clap control, and their position is the
+                // whole state machine: shut at rest, open while a clap is
+                // armed, shut again on the sync frame. That mirrors how a
+                // clapper is actually used — you open it, then you close it,
+                // and the closing is the sync point.
+                //
+                // Opening on arm is a deliberate exception to "nothing changes
+                // before the sync point". It is safe because it cannot be
+                // mistaken for the mark: open and shut are opposite states, and
+                // only the *shut* frame carries the freeze, the colour change
+                // and the crack.
+                ClapperSticks(isClosed: !model.isClapPending)
                     .frame(height: 68)
-                    .animation(nil, value: model.isHolding)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        if model.isHolding { model.releaseHold() } else { model.clap() }
+                    }
+                    .animation(nil, value: model.isClapPending)
+                    .accessibilityLabel(model.isHolding ? "Resume" : "Clap")
+                    .accessibilityAddTraits(.isButton)
                 header
                 timecodeDisplay
                 metadataRow
@@ -218,8 +235,8 @@ struct SlateView: View {
     }
 
     private var clapButtonTitle: String {
-        if model.isHolding { return "RESUME" }
-        return model.isClapPending ? "READY…" : "CLAP"
+        if model.isHolding { return "TAP STICKS TO RESUME" }
+        return model.isClapPending ? "READY…" : "TAP STICKS TO CLAP"
     }
 
     private var clapButtonColor: Color {
@@ -253,20 +270,13 @@ struct SlateView: View {
 
             Spacer()
 
-            // Feedback for the press lives on the button alone. Nothing in the
-            // timecode display may change before the sync point, or the change
-            // itself becomes a false sync mark.
-            Button {
-                if model.isHolding { model.releaseHold() } else { model.clap() }
-            } label: {
-                Text(clapButtonTitle)
-                    .font(.system(size: 26, weight: .heavy, design: .monospaced))
-                    .frame(minWidth: 190)
-                    .padding(.vertical, 16)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(clapButtonColor))
-                    .foregroundStyle(model.isHolding ? .black : .white)
-            }
-            .disabled(model.isClapPending)
+            // No clap button: the sticks themselves are the control. What is
+            // left here is a word for what they are doing, since "armed" is
+            // otherwise only legible to someone who already knows the sticks
+            // open before they shut.
+            Text(clapButtonTitle)
+                .font(.system(size: 15, weight: .bold, design: .monospaced))
+                .foregroundStyle(clapButtonColor)
         }
     }
 
