@@ -180,7 +180,13 @@ public struct AudioDiagnostics: Sendable {
 
         // Leave the microphone off again — the whole privacy design of this app
         // is that it listens only between arming a jam and getting one.
-        try? session.setActive(false)
+        //
+        // Done by moving to a playback category rather than deactivating: a
+        // recording category is what permits capture, so changing it ends the
+        // capture, while `setActive(false)` would additionally tear down every
+        // other audio engine in the process. Merely *opening* this screen used
+        // to silence the clap for that reason.
+        try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
         return d
     }
 }

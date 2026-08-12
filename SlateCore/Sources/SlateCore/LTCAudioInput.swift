@@ -297,9 +297,16 @@ public final class LTCAudioInput {
         }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false)
-        #endif
+        // Deliberately *not* `setActive(false)`. Deactivating the session tears
+        // down every AVAudioEngine in the process, not just this one — it
+        // invalidated the clap player's graph and left the app silent for the
+        // rest of the session, which took three attempts to pin down because
+        // the simulator's session does not really deactivate.
+        //
+        // Stopping the engine already releases the microphone; the app then
+        // moves the session to a playback category, which is what actually ends
+        // recording. Privacy is unchanged: nothing is capturing once the engine
+        // is stopped and the tap is gone.
         isRunning = false
     }
 

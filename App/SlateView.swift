@@ -13,6 +13,7 @@ struct SlateView: View {
     @AppStorage("slateLayout") private var slateLayout: SlateLayout = .metaTop
     /// A white slate at 3am is a lamp pointed at everyone's eyes.
     @AppStorage("nightMode") private var nightMode = false
+    @AppStorage("timecodeInk") private var timecodeInk: TimecodeInk = .red
     /// Drives the keyboard's Done button. Without it the only way out of a
     /// slate field is the return key, which is a poor thing to hunt for with
     /// a camera waiting.
@@ -23,6 +24,7 @@ struct SlateView: View {
             model: model,
             layout: slateLayout,
             night: nightMode,
+            ink: timecodeInk,
             onTapSticks: { if model.isHolding { model.releaseHold() } else { model.clap() } },
             onJam: { model.armJam() },
             onNextShot: { model.advanceShot() },
@@ -380,6 +382,11 @@ struct SlateView: View {
                         }
                     }
                     Toggle("Night", isOn: $nightMode)
+                    Picker("Timecode colour", selection: $timecodeInk) {
+                        ForEach(TimecodeInk.allCases) { i in
+                            Text(i.displayName).tag(i)
+                        }
+                    }
                 } header: {
                     Text("Slate")
                 } footer: {

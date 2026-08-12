@@ -20,6 +20,24 @@ enum SlateLayout: String, CaseIterable, Identifiable {
     }
 }
 
+/// What colour the running timecode is drawn in.
+///
+/// Red is the dry-erase convention on a physical slate rather than a legibility
+/// decision — black has marginally better contrast on white. Worth having both,
+/// since the reason to prefer red is familiarity and that is the operator's call.
+enum TimecodeInk: String, CaseIterable, Identifiable {
+    case red
+    case ink
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .red: return "Red"
+        case .ink: return "Black"
+        }
+    }
+}
+
 /// The two grounds a slate has to work on.
 ///
 /// Night is not an inversion of day. A white slate at 3am is a lamp pointed at
@@ -85,6 +103,7 @@ struct SlateFace: View {
     @ObservedObject var model: SlateViewModel
     var layout: SlateLayout
     var night: Bool
+    var ink: TimecodeInk
     var onTapSticks: () -> Void
     var onJam: () -> Void
     var onNextShot: () -> Void
@@ -503,6 +522,9 @@ struct SlateFace: View {
 
     private var timecodeColor: Color {
         if model.isFlashing { return p.flashInk }
-        return model.isHolding ? p.ink : p.red
+        // Held timecode always goes to ink: the frozen frame is the one an
+        // editor reads, and it wants maximum contrast whatever the preference.
+        if model.isHolding { return p.ink }
+        return ink == .red ? p.red : p.ink
     }
 }

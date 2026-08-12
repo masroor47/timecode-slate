@@ -25,9 +25,10 @@ import Foundation
 final class ClapSound {
     static let shared = ClapSound()
 
-    private let engine = AVAudioEngine()
-    private let node = AVAudioPlayerNode()
+    private var engine = AVAudioEngine()
+    private var node = AVAudioPlayerNode()
     private let buffer: AVAudioPCMBuffer?
+    private var configObserver: NSObjectProtocol?
 
     private var attached = false
     /// Last engine failure, surfaced on the diagnostics sheet. Silence is very
@@ -42,13 +43,34 @@ final class ClapSound {
         // device: it invalidates the graph, and the node's connection to the
         // mixer goes with it. Restarting alone then yields silence, which is
         // why this was device-only and invisible in the simulator.
-        NotificationCenter.default.addObserver(
+        observeConfigurationChanges()
+    }
+
+    private func observeConfigurationChanges() {
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine,
             queue: .main
         ) { _ in
             Task { @MainActor in ClapSound.shared.recover() }
         }
+    }
+
+    /// Throw the engine away and build a new one.
+    ///
+    /// An `AVAudioEngine` is bound to the audio session it was started against.
+    /// Once that session has been pulled out from under it the engine can end up
+    /// permanently unable to start again — attached, connected, and refusing to
+    /// run, which is exactly what the diagnostics reported. Nothing recovers it
+    /// short of a fresh instance.
+    private func rebuild() {
+        engine.stop()
+        engine = AVAudioEngine()
+        node = AVAudioPlayerNode()
+        attached = false
+        ensureGraph()
+        observeConfigurationChanges()
     }
 
     /// Attach and connect the player, if that is not already true.
@@ -118,8 +140,19 @@ final class ClapSound {
                 try engine.start()
                 lastError = nil
             } catch {
-                lastError = error.localizedDescription
-                return
+                // One retry on a clean engine. A failure here is almost always
+                // an engine outliving the session it was started against, and a
+                // new one starts where the old one never will again.
+                lastError = "start failed (\(error.localizedDescription)); rebuilding"
+                rebuild()
+                engine.prepare()
+                do {
+                    try engine.start()
+                    lastError = nil
+                } catch {
+                    lastError = "rebuild failed: \(error.localizedDescription)"
+                    return
+                }
             }
         }
         // The node runs continuously and idles silently; scheduled buffers then
