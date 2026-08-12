@@ -11,6 +11,8 @@ struct SlateView: View {
     /// from Settings, because this is a judgement to make by looking at it on
     /// the phone rather than by reasoning about it.
     @AppStorage("slateLayout") private var slateLayout: SlateLayout = .metaTop
+    /// A white slate at 3am is a lamp pointed at everyone's eyes.
+    @AppStorage("nightMode") private var nightMode = false
     /// Drives the keyboard's Done button. Without it the only way out of a
     /// slate field is the return key, which is a poor thing to hunt for with
     /// a camera waiting.
@@ -20,6 +22,7 @@ struct SlateView: View {
         SlateFace(
             model: model,
             layout: slateLayout,
+            night: nightMode,
             onTapSticks: { if model.isHolding { model.releaseHold() } else { model.clap() } },
             onJam: { model.armJam() },
             onNextShot: { model.advanceShot() },
@@ -345,17 +348,41 @@ struct SlateView: View {
                            + "the decoder will not have to infer it.")
                 }
                 Section {
+                    Button {
+                        model.refreshDiagnostics()
+                        showSettings = false
+                        showDiagnostics = true
+                    } label: {
+                        HStack {
+                            Label("Timecode input", systemImage: "cable.connector")
+                            Spacer()
+                            Text(model.inputName)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                } header: {
+                    Text("Input")
+                } footer: {
+                    Text("Shows every audio input iOS can see and which one the "
+                         + "slate will listen to. Open this if a timecode cable "
+                         + "is plugged in and the slate is not hearing it — it "
+                         + "will say whether iOS found the interface at all.")
+                }
+                Section {
                     Picker("Layout", selection: $slateLayout) {
                         ForEach(SlateLayout.allCases) { l in
                             Text(l.displayName).tag(l)
                         }
                     }
+                    Toggle("Night", isOn: $nightMode)
                 } header: {
                     Text("Slate")
                 } footer: {
-                    Text("Both put the timecode above scene, shot and take. "
-                         + "This is only whether the production block reads as "
-                         + "a header or a footer.")
+                    Text("Layout is only whether the production block reads as a "
+                         + "header or a footer; both put the timecode above "
+                         + "scene, shot and take. Night swaps the slate to a "
+                         + "dark ground for shooting after dark.")
                 }
                 Section {
                     Toggle("Audible clap", isOn: $model.clapSoundEnabled)

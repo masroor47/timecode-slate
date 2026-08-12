@@ -64,6 +64,11 @@ final class SlateViewModel: ObservableObject {
     @Published private(set) var level: Float = 0
     /// Which half of the hold the frozen slate is showing.
     @Published private(set) var holdPhase: HoldPhase = .timecode
+    /// True for the first couple of frames after the sticks meet. The whole
+    /// face inverts for exactly this long, so the sync point is one
+    /// unmistakable frame rather than something to be inferred.
+    @Published private(set) var isFlashing = false
+    private var flashUntilHostTime: Double?
     /// User bits exactly as decoded at the last jam, or nil if we never jammed.
     @Published private(set) var decodedUserBits: String?
 
@@ -348,7 +353,12 @@ final class SlateViewModel: ObservableObject {
     private func performPendingClap(atHostTime host: Double) {
         guard let due = scheduledClapHostTime, host >= due else { return }
         scheduledClapHostTime = nil
-        slate.clap(timecode: clock.timecode(atHostTime: host), atHostTime: host)
+        let clapped = clock.timecode(atHostTime: host)
+        // Two frames of the clapped rate, so the flash means the same thing at
+        // 24 fps as at 60 — long enough that a camera cannot fall between it,
+        // short enough that it reads as a flash rather than a state.
+        flashUntilHostTime = host + 2 / clapped.rate.actualFPS
+        slate.clap(timecode: clapped, atHostTime: host)
         // Note there is deliberately no audio call here — the crack was
         // scheduled against the audio clock when the clap was armed.
     }
@@ -437,6 +447,10 @@ final class SlateViewModel: ObservableObject {
             ? (heldEvent?.timecode.description ?? displayTimecode)
             : clock.timecode(atHostTime: host).description
         if shown != displayTimecode { displayTimecode = shown }
+
+        let flashing = flashUntilHostTime.map { host < $0 } ?? false
+        if flashing != isFlashing { isFlashing = flashing }
+        if !flashing { flashUntilHostTime = nil }
 
         // Drop out of "locked" once the signal stops arriving.
         if let last = lastLockHostTime, host - last > 0.5 {

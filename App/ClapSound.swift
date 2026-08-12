@@ -28,7 +28,6 @@ final class ClapSound {
     private let engine = AVAudioEngine()
     private let node = AVAudioPlayerNode()
     private let buffer: AVAudioPCMBuffer?
-    private var isRunning = false
 
     private init() {
         buffer = Self.renderBuffer()
@@ -59,18 +58,25 @@ final class ClapSound {
         }
     }
 
+    /// Bring the engine up, or back up.
+    ///
+    /// **State is read from the engine, never cached.** This used to keep an
+    /// `isRunning` flag, which was wrong in a way that silenced the clap for the
+    /// rest of a session: deactivating the audio session — which is exactly what
+    /// `LTCAudioInput.stop()` does after a jam is taken or cancelled — stops the
+    /// engine underneath us, and the flag stayed `true`. Every later call then
+    /// short-circuited, and buffers were scheduled onto a dead engine.
     private func start() {
-        guard !isRunning, buffer != nil else { return }
-        engine.prepare()
-        do {
-            try engine.start()
-            // The node runs continuously and idles silently; scheduled buffers
-            // then fire at their appointed time rather than "whenever play()
-            // gets called".
+        guard buffer != nil else { return }
+        if !engine.isRunning {
+            engine.prepare()
+            try? engine.start()
+        }
+        // The node runs continuously and idles silently; scheduled buffers then
+        // fire at their appointed time rather than "whenever play() gets
+        // called". It stops along with the engine, so it needs restarting too.
+        if engine.isRunning, !node.isPlaying {
             node.play()
-            isRunning = true
-        } catch {
-            isRunning = false
         }
     }
 
@@ -79,8 +85,8 @@ final class ClapSound {
     /// Output latency is subtracted, because the target is when the sound
     /// reaches the room, not when it enters the render graph.
     func schedule(atHostTime hostTime: Double) {
-        if !isRunning { start() }
-        guard isRunning, let buffer else { return }
+        start()
+        guard engine.isRunning, let buffer else { return }
 
         let latency = AVAudioSession.sharedInstance().outputLatency
             + engine.outputNode.presentationLatency

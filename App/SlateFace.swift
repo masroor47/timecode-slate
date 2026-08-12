@@ -20,8 +20,57 @@ enum SlateLayout: String, CaseIterable, Identifiable {
     }
 }
 
-/// The slate face: white acrylic, ruled fields, red timecode — a real insert
-/// slate rather than an app that happens to show timecode.
+/// The two grounds a slate has to work on.
+///
+/// Night is not an inversion of day. A white slate at 3am is a lamp pointed at
+/// everyone's eyes, but simply flipping the colours gives thin white type
+/// glowing on black, which blooms on camera and reads worse. Night therefore
+/// uses a softer ink and a lighter red than a naive invert would.
+struct SlatePalette {
+    let face: Color
+    let ink: Color
+    let inkSoft: Color
+    let inkFaint: Color
+    let red: Color
+    let blue: Color
+    let amber: Color
+    /// Held after the flash, for the rest of the timecode window.
+    let hold: Color
+    /// The user-bits half of the hold.
+    let userBits: Color
+    /// The sync frame itself.
+    let flash: Color
+    let flashInk: Color
+
+    static let day = SlatePalette(
+        face:     Color(red: 0.965, green: 0.969, blue: 0.969),
+        ink:      Color(red: 0.082, green: 0.094, blue: 0.110),
+        inkSoft:  Color(red: 0.294, green: 0.337, blue: 0.361),
+        inkFaint: Color(red: 0.416, green: 0.459, blue: 0.482),
+        red:      Color(red: 0.784, green: 0.063, blue: 0.180),
+        blue:     Color(red: 0.173, green: 0.431, blue: 0.561),
+        amber:    Color(red: 0.878, green: 0.639, blue: 0.235),
+        hold:     Color(red: 0.949, green: 0.757, blue: 0.306),
+        userBits: Color(red: 0.612, green: 0.855, blue: 0.882),
+        flash:    Color(red: 0.055, green: 0.063, blue: 0.075),
+        flashInk: Color.white)
+
+    static let night = SlatePalette(
+        face:     Color(red: 0.055, green: 0.063, blue: 0.075),
+        ink:      Color(red: 0.898, green: 0.914, blue: 0.918),
+        inkSoft:  Color(red: 0.612, green: 0.655, blue: 0.678),
+        inkFaint: Color(red: 0.447, green: 0.490, blue: 0.514),
+        red:      Color(red: 0.937, green: 0.322, blue: 0.400),
+        blue:     Color(red: 0.271, green: 0.576, blue: 0.718),
+        amber:    Color(red: 0.878, green: 0.678, blue: 0.325),
+        hold:     Color(red: 0.514, green: 0.376, blue: 0.106),
+        userBits: Color(red: 0.145, green: 0.353, blue: 0.396),
+        flash:    Color(red: 0.965, green: 0.969, blue: 0.969),
+        flashInk: Color(red: 0.055, green: 0.063, blue: 0.075))
+}
+
+/// The slate face: ruled fields, red timecode — a real insert slate rather than
+/// an app that happens to show timecode.
 ///
 /// **Everything is sized against the height, not the width.** The phone in
 /// landscape is roughly 2.17:1, so height is the binding constraint and always
@@ -35,6 +84,7 @@ enum SlateLayout: String, CaseIterable, Identifiable {
 struct SlateFace: View {
     @ObservedObject var model: SlateViewModel
     var layout: SlateLayout
+    var night: Bool
     var onTapSticks: () -> Void
     var onJam: () -> Void
     var onNextShot: () -> Void
@@ -48,16 +98,17 @@ struct SlateFace: View {
 
     // Row budget, in percent of height. Must sum to 100.
     //
-    // Turning the scene/shot/take labels vertical is what paid for the bigger
-    // sticks: a horizontal label costs a line of height in every cell, and
-    // three cells' worth of that adds up. Stood on end, the label costs a few
-    // percent of *width* — which this face has to spare — and hands the whole
-    // cell height back to the value.
-    private let sticksRow: CGFloat = 20
-    private let metaRow:   CGFloat = 12
-    private let tcRow:     CGFloat = 28
-    private let takeRow:   CGFloat = 27
-    private let footRow:   CGFloat = 13
+    // Turning the scene/shot/take labels vertical is what paid for the sticks:
+    // a horizontal label costs a line of height in every cell, and three cells'
+    // worth adds up. Stood on end, a label costs a few percent of *width* —
+    // which this face has to spare — and hands the cell height to the value.
+    private let sticksRow: CGFloat = 26
+    private let tcRow:     CGFloat = 23
+    private let takeRow:   CGFloat = 30
+    private let metaRow:   CGFloat = 10
+    private let footRow:   CGFloat = 11
+
+    private var p: SlatePalette { night ? .night : .day }
 
     var body: some View {
         // Note this reader deliberately stays *inside* the safe area: adding
@@ -66,43 +117,31 @@ struct SlateFace: View {
         // done with negative padding instead.
         GeometryReader { geo in
             // Both horizontal insets are kept in full. iOS reports them
-            // *symmetrically* in landscape, so there is no way to tell from
-            // them which edge the Dynamic Island is actually on — reclaiming
-            // the "empty" side is a coin flip, and losing it puts hardware over
-            // the take steppers. The room is taken vertically and from internal
-            // padding instead, which is reliable.
+            // *symmetrically* in landscape, so there is no way to tell from them
+            // which edge the Dynamic Island is on — reclaiming the "empty" side
+            // is a coin flip, and losing it puts hardware over the take
+            // steppers. Height is taken instead, which is reliable.
             let insets = geo.safeAreaInsets
-            let growLeading: CGFloat = 0
-            let growTrailing: CGFloat = 0
-            let growTop      = max(insets.top - 2, 0)
-            let growBottom   = max(insets.bottom - 2, 0)
+            let growTop    = max(insets.top - 2, 0)
+            let growBottom = max(insets.bottom - 2, 0)
 
-            // What is still reserved once we have grown — the sticks bleed by
-            // exactly this much to reach the physical edges.
-            let keepLeading  = insets.leading - growLeading
-            let keepTrailing = insets.trailing - growTrailing
-
-            // Thin rules. They only have to read as divisions; any heavier and
-            // they eat height the values want.
             let rule: CGFloat = 2
             // The three rules are laid out *between* the rows, so their height
-            // has to come out of the budget before it is divided into units.
-            // Leaving them out made the rows total slightly more than the
-            // screen, so the slate overflowed instead of fitting it.
-            let usable = geo.size.height + growTop + growBottom - rule * 3
-            let u = usable / 100
+            // comes out of the budget before it is divided into units. Leaving
+            // them out made the rows total more than the screen.
+            let u = (geo.size.height + growTop + growBottom - rule * 3) / 100
 
             VStack(spacing: 0) {
-                sticks(u: u, bleedLeading: keepLeading, bleedTrailing: keepTrailing)
+                sticks(u: u, bleedLeading: insets.leading, bleedTrailing: insets.trailing)
 
                 if layout == .metaTop {
                     meta(u: u).frame(height: metaRow * u)
                     divider(rule)
                 }
 
-                timecode(u: u).frame(height: tcRow * u)
+                timecode(u: u).frame(height: tcRow * u).clipped()
                 divider(rule)
-                take(u: u).frame(height: takeRow * u)
+                take(u: u).frame(height: takeRow * u).clipped()
                 divider(rule)
 
                 if layout == .metaBottom {
@@ -112,13 +151,9 @@ struct SlateFace: View {
 
                 foot(u: u).frame(height: footRow * u)
             }
-            // Negative padding grows the slate back out over the safe area on
-            // the edges where nothing is in the way.
-            .padding(.leading, -growLeading)
-            .padding(.trailing, -growTrailing)
             .padding(.top, -growTop)
             .padding(.bottom, -growBottom)
-            .foregroundStyle(Self.ink)
+            .foregroundStyle(inkColor)
         }
         .background(faceColor.ignoresSafeArea())
         .toolbar {
@@ -134,11 +169,14 @@ struct SlateFace: View {
     /// Full-bleed, unlike everything else: on a real slate the sticks run the
     /// whole width of the board, and inset chevrons look like a screenshot of a
     /// slate rather than a slate.
+    ///
+    /// The bars are sized to fill the row rather than to a fixed height — that
+    /// was why enlarging the row kept doing nothing visible.
     private func sticks(u: CGFloat, bleedLeading: CGFloat, bleedTrailing: CGFloat) -> some View {
-        ClapperSticks(isClosed: !model.isClapPending, barHeight: 6.6 * u)
+        ClapperSticks(isClosed: !model.isClapPending, barHeight: sticksRow * u / 2)
             .frame(height: sticksRow * u)
             .clipped()
-            // Cancel the outer inset so the chevrons still reach both physical
+            // Cancel the safe-area inset so the chevrons reach both physical
             // edges of the display.
             .padding(.leading, -bleedLeading)
             .padding(.trailing, -bleedTrailing)
@@ -156,25 +194,26 @@ struct SlateFace: View {
     /// which is the one time the digits are *not* timecode.
     private func timecode(u: CGFloat) -> some View {
         ZStack {
-            Text(showingUserBits ? model.userBitsDisplay : model.displayTimecode)
-                .font(.system(size: 28 * u, weight: .bold, design: .monospaced))
-                .monospacedDigit()
-                .minimumScaleFactor(0.4)
-                .lineLimit(1)
+            fillingText(showingUserBits ? model.userBitsDisplay : model.displayTimecode,
+                        size: 25 * u, weight: .bold, monospaced: true)
                 .foregroundStyle(timecodeColor)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            HStack {
-                Spacer()
-                Text(showingUserBits ? "USER BITS" : "\(model.rate.displayName) FPS")
-                    .font(.system(size: 3 * u, weight: .semibold))
-                    .tracking(3 * u * 0.16)
-                    .foregroundStyle(Self.inkFaint)
-                    .fixedSize()
+            // Only during user bits. The rate lives in the footer instead — at
+            // full size the timecode reaches the trailing edge and ran straight
+            // into it, and the digits get priority.
+            if showingUserBits {
+                HStack {
+                    Spacer()
+                    Text("USER BITS")
+                        .font(.system(size: 2.8 * u, weight: .semibold))
+                        .tracking(2.8 * u * 0.16)
+                        .foregroundStyle(model.isFlashing ? p.flashInk : p.inkFaint)
+                        .fixedSize()
+                }
             }
         }
         .padding(.horizontal, 2.5 * u)
-        .padding(.vertical, 0.3 * u)
     }
 
     private func take(u: CGFloat) -> some View {
@@ -187,16 +226,13 @@ struct SlateFace: View {
                 slateField(text: $model.info.shot, u: u)
             }
             vRule(u)
-            // Take is stepped rather than typed: it advances far more often
-            // than it is set, and typing a number on set wastes a hand. The
-            // steppers run the full height of the cell for the same reason —
-            // they are pressed constantly, often without looking.
+            // Take is stepped rather than typed: it advances far more often than
+            // it is set, and typing a number on set wastes a hand. The steppers
+            // run the full height of the cell for the same reason — they are
+            // pressed constantly, often without looking.
             cell("Take", u: u) {
                 HStack(spacing: 1.5 * u) {
-                    Text("\(model.info.take)")
-                        .font(.system(size: 26 * u, weight: .bold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.4)
+                    fillingText("\(model.info.take)", size: 33 * u, weight: .bold)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                     VStack(spacing: 0.8 * u) {
                         stepper("plus", u: u) { model.info.take += 1 }
@@ -208,8 +244,135 @@ struct SlateFace: View {
         }
     }
 
-    /// A ruled cell with its label stood on end down the left edge, so the
-    /// value gets the cell's full height rather than sharing it with a caption.
+    /// Text sized to fill its cell rather than to sit politely inside a line
+    /// box. A line box is about 1.2× the font size but the capitals only fill
+    /// about 0.72×, so type that "fits" leaves a third of the cell empty above
+    /// and below. Taking the natural size and letting the parent clip trims the
+    /// leading instead of the letters.
+    private func fillingText(_ string: String, size: CGFloat,
+                             weight: Font.Weight, monospaced: Bool = false) -> some View {
+        Text(string)
+            .font(.system(size: size, weight: weight,
+                          design: monospaced ? .monospaced : .default))
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.3)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func meta(u: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            readout("Production", model.info.production, u: u)
+            vRule(u)
+            readout("Director", model.info.director, u: u)
+            vRule(u)
+            readout("Camera", model.info.cinematographer, u: u)
+        }
+    }
+
+    private func foot(u: CGFloat) -> some View {
+        HStack(spacing: 3 * u) {
+            VStack(alignment: .leading, spacing: 0.4 * u) {
+                label("Roll", u: u)
+                Text(display(model.info.roll))
+                    .font(.system(size: 4.6 * u, weight: .bold))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 0.4 * u) {
+                label("Sound", u: u)
+                Text(display(model.info.soundRoll))
+                    .font(.system(size: 4.6 * u, weight: .bold))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            ticks(u: u)
+
+            Spacer(minLength: 0)
+
+            Text("\(model.rate.displayName) FPS")
+                .font(.system(size: 2.8 * u, weight: .semibold))
+                .tracking(2.8 * u * 0.16)
+                .foregroundStyle(p.inkSoft)
+                .fixedSize()
+
+            // Status is an indicator, not a sentence — it truncated as prose,
+            // and the detail belongs on the diagnostics sheet behind it.
+            Button(action: onDiagnostics) {
+                HStack(spacing: 0.9 * u) {
+                    Circle().fill(model.status.color).frame(width: 2.2 * u, height: 2.2 * u)
+                    Text(model.inputName)
+                        .font(.system(size: 2.8 * u, weight: .semibold, design: .monospaced))
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                .foregroundStyle(p.inkSoft)
+            }
+
+            Button(action: onJam) {
+                Text(model.isArmedForJam ? "CANCEL" : "JAM")
+                    .font(.system(size: 3.2 * u, weight: .bold))
+                    .tracking(1.2)
+                    .fixedSize()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 2.4 * u)
+                    .padding(.vertical, 1.3 * u)
+                    .background(RoundedRectangle(cornerRadius: 1.2 * u)
+                        .fill(model.isArmedForJam ? p.amber : p.blue))
+            }
+
+            Button(action: onNextShot) {
+                Text("NEXT")
+                    .font(.system(size: 3.2 * u, weight: .bold))
+                    .tracking(1.2)
+                    .fixedSize()
+                    .foregroundStyle(inkColor)
+                    .padding(.horizontal, 2.4 * u)
+                    .padding(.vertical, 1.3 * u)
+                    .background(RoundedRectangle(cornerRadius: 1.2 * u)
+                        .stroke(inkColor, lineWidth: max(1, 0.3 * u)))
+            }
+
+            Button(action: onSettings) {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 5.5 * u))
+                    .foregroundStyle(p.inkSoft)
+                    .frame(width: 9 * u, height: 9 * u)
+                    .contentShape(Rectangle())
+            }
+        }
+        .padding(.horizontal, 3 * u)
+    }
+
+    // MARK: - Pieces
+
+    private func display(_ s: String) -> String { s.isEmpty ? "—" : s }
+
+    private func label(_ text: String, u: CGFloat) -> some View {
+        Text(text.uppercased())
+            .font(.system(size: 2.6 * u, weight: .semibold))
+            .tracking(2.6 * u * 0.16)
+            .foregroundStyle(model.isFlashing ? p.flashInk : p.inkFaint)
+            .lineLimit(1)
+            .fixedSize()
+    }
+
+    private func readout(_ title: String, _ value: String, u: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0.3 * u) {
+            label(title, u: u)
+            Text(display(value))
+                .font(.system(size: 5.2 * u, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 3 * u)
+    }
+
+    /// A ruled cell with its label stood on end down the left edge, so the value
+    /// gets the cell's full height rather than sharing it with a caption.
     private func cell<Content: View>(_ title: String, u: CGFloat,
                                      @ViewBuilder content: () -> Content) -> some View {
         HStack(spacing: 1.2 * u) {
@@ -231,11 +394,11 @@ struct SlateFace: View {
             // and duplicate ids silently drop rows.
             ForEach(letters.indices, id: \.self) { i in
                 Text(String(letters[i]))
-                    .font(.system(size: 3.2 * u, weight: .semibold))
+                    .font(.system(size: 3 * u, weight: .semibold))
                     .fixedSize()
             }
         }
-        .foregroundStyle(Self.inkFaint)
+        .foregroundStyle(model.isFlashing ? p.flashInk : p.inkFaint)
         .frame(maxHeight: .infinity)
         .padding(.leading, 1.2 * u)
     }
@@ -243,131 +406,27 @@ struct SlateFace: View {
     private func slateField(text: Binding<String>, u: CGFloat) -> some View {
         TextField("", text: text)
             .textFieldStyle(.plain)
-            .font(.system(size: 26 * u, weight: .bold))
+            .font(.system(size: 33 * u, weight: .bold))
             .autocorrectionDisabled()
             .textInputAutocapitalization(.characters)
             .lineLimit(1)
-            .minimumScaleFactor(0.4)
+            .minimumScaleFactor(0.3)
             .focused($editing)
             .submitLabel(.done)
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-    }
-
-    private func meta(u: CGFloat) -> some View {
-        HStack(spacing: 0) {
-            readout("Production", model.info.production, u: u)
-            vRule(u)
-            readout("Director", model.info.director, u: u)
-            vRule(u)
-            readout("Camera", model.info.cinematographer, u: u)
-        }
-    }
-
-    private func foot(u: CGFloat) -> some View {
-        HStack(spacing: 3 * u) {
-            VStack(alignment: .leading, spacing: 0.5 * u) {
-                label("Roll", u: u)
-                Text(display(model.info.roll))
-                    .font(.system(size: 5.6 * u, weight: .bold))
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            VStack(alignment: .leading, spacing: 0.5 * u) {
-                label("Sound", u: u)
-                Text(display(model.info.soundRoll))
-                    .font(.system(size: 5.6 * u, weight: .bold))
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            ticks(u: u)
-
-            Spacer(minLength: 0)
-
-            // Status is an indicator, not a sentence — it truncated as prose,
-            // and the detail belongs on the diagnostics sheet behind it anyway.
-            Button(action: onDiagnostics) {
-                HStack(spacing: 0.9 * u) {
-                    Circle().fill(model.status.color).frame(width: 2.4 * u, height: 2.4 * u)
-                    Text(model.inputName)
-                        .font(.system(size: 3 * u, weight: .semibold, design: .monospaced))
-                        .lineLimit(1)
-                        .fixedSize()
-                }
-                .foregroundStyle(Self.inkSoft)
-            }
-
-            Button(action: onJam) {
-                Text(model.isArmedForJam ? "CANCEL" : "JAM")
-                    .font(.system(size: 3.4 * u, weight: .bold))
-                    .tracking(1.2)
-                    .fixedSize()
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 2.6 * u)
-                    .padding(.vertical, 1.5 * u)
-                    .background(RoundedRectangle(cornerRadius: 1.2 * u)
-                        .fill(model.isArmedForJam ? Self.amber : Self.blue))
-            }
-
-            Button(action: onNextShot) {
-                Text("NEXT")
-                    .font(.system(size: 3.4 * u, weight: .bold))
-                    .tracking(1.2)
-                    .fixedSize()
-                    .foregroundStyle(Self.ink)
-                    .padding(.horizontal, 2.6 * u)
-                    .padding(.vertical, 1.5 * u)
-                    .background(RoundedRectangle(cornerRadius: 1.2 * u)
-                        .stroke(Self.ink, lineWidth: max(1, 0.35 * u)))
-            }
-
-            Button(action: onSettings) {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 6 * u))
-                    .foregroundStyle(Self.inkSoft)
-                    .frame(width: 10 * u, height: 10 * u)
-                    .contentShape(Rectangle())
-            }
-        }
-        .padding(.horizontal, 3 * u)
-    }
-
-    // MARK: - Pieces
-
-    private func display(_ s: String) -> String { s.isEmpty ? "—" : s }
-
-    private func label(_ text: String, u: CGFloat) -> some View {
-        Text(text.uppercased())
-            .font(.system(size: 2.8 * u, weight: .semibold))
-            .tracking(2.8 * u * 0.16)
-            .foregroundStyle(Self.inkFaint)
-            .lineLimit(1)
-            .fixedSize()
-    }
-
-    private func readout(_ title: String, _ value: String, u: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0.5 * u) {
-            label(title, u: u)
-            Text(display(value))
-                .font(.system(size: 6 * u, weight: .bold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 3 * u)
     }
 
     private func stepper(_ symbol: String, u: CGFloat, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 4.2 * u, weight: .bold))
-                .foregroundStyle(Self.ink)
-                .frame(width: 12 * u)
+                .font(.system(size: 4 * u, weight: .bold))
+                .foregroundStyle(inkColor)
+                .frame(width: 11 * u)
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .background(RoundedRectangle(cornerRadius: 1 * u)
-                    .stroke(Self.ink, lineWidth: max(1, 0.3 * u)))
+                    .stroke(inkColor, lineWidth: max(1, 0.3 * u)))
         }
     }
 
@@ -383,48 +442,48 @@ struct SlateFace: View {
 
     private func tick(_ text: String, on: Bool, u: CGFloat) -> some View {
         Text(text)
-            .font(.system(size: 3.2 * u, weight: .semibold))
+            .font(.system(size: 3 * u, weight: .semibold))
             // Without this the three-letter ticks break mid-word under
             // pressure — "EXT" became "EX / T".
             .fixedSize()
-            .foregroundStyle(on ? Self.ink : Self.inkFaint)
+            .foregroundStyle(on ? inkColor : p.inkFaint)
             .overlay(alignment: .bottom) {
                 if on {
-                    Rectangle().fill(Self.red).frame(height: 0.7 * u).offset(y: 1.2 * u)
+                    Rectangle().fill(p.red).frame(height: 0.6 * u).offset(y: 1.1 * u)
                 }
             }
     }
 
     private func divider(_ height: CGFloat) -> some View {
-        Rectangle().fill(Self.ink).frame(height: height)
+        Rectangle().fill(inkColor).frame(height: height)
     }
 
     private func vRule(_ u: CGFloat) -> some View {
-        Rectangle().fill(Self.ink).frame(width: max(1, 0.3 * u))
+        Rectangle().fill(inkColor).frame(width: max(1, 0.3 * u))
     }
 
     // MARK: - Colour
 
     private var showingUserBits: Bool { model.isHolding && model.holdPhase == .userBits }
 
-    /// The sync mark: the whole face goes amber on the collision frame and
-    /// stays there for the timecode hold, then shifts again for user bits. A
-    /// full-face change is unmissable in a still, which is the entire job.
+    /// The sync mark, in three steps on one timeline:
+    ///
+    /// 1. **Flash** — the whole face inverts for two frames. Nothing else on the
+    ///    slate is ever this colour, so a single frame of it is unambiguous.
+    /// 2. **Hold** — settles to amber for the rest of the timecode window.
+    /// 3. **User bits** — shifts again, so the two halves of the hold cannot be
+    ///    mistaken for one another.
     private var faceColor: Color {
-        if showingUserBits { return Self.cyanWash }
-        if model.isHolding { return Self.amberWash }
-        return Self.acrylic
+        if model.isFlashing { return p.flash }
+        if showingUserBits { return p.userBits }
+        if model.isHolding { return p.hold }
+        return p.face
     }
 
-    private var timecodeColor: Color { model.isHolding ? Self.ink : Self.red }
+    private var inkColor: Color { model.isFlashing ? p.flashInk : p.ink }
 
-    static let acrylic   = Color(red: 0.965, green: 0.969, blue: 0.969)
-    static let amberWash = Color(red: 0.949, green: 0.757, blue: 0.306)
-    static let cyanWash  = Color(red: 0.612, green: 0.855, blue: 0.882)
-    static let ink       = Color(red: 0.082, green: 0.094, blue: 0.110)
-    static let inkSoft   = Color(red: 0.294, green: 0.337, blue: 0.361)
-    static let inkFaint  = Color(red: 0.416, green: 0.459, blue: 0.482)
-    static let red       = Color(red: 0.784, green: 0.063, blue: 0.180)
-    static let blue      = Color(red: 0.173, green: 0.431, blue: 0.561)
-    static let amber     = Color(red: 0.878, green: 0.639, blue: 0.235)
+    private var timecodeColor: Color {
+        if model.isFlashing { return p.flashInk }
+        return model.isHolding ? p.ink : p.red
+    }
 }
