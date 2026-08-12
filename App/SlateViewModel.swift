@@ -180,6 +180,7 @@ final class SlateViewModel: ObservableObject {
         armedForJam = false
         armedAtHostTime = nil
         audio.stop()
+        restorePlaybackSession()
         level = 0
         inputName = "—"
         if let message {
@@ -188,6 +189,17 @@ final class SlateViewModel: ObservableObject {
             status = restingStatus()
         }
         #endif
+    }
+
+    /// Hand the audio route back to playback after capture has finished with it.
+    ///
+    /// `audio.stop()` deactivates the session, which leaves the clap player with
+    /// nothing to sound through. The successful-jam path already did this; the
+    /// cancel and timeout paths did not, so arming a jam and backing out left
+    /// the slate silent for the rest of the session.
+    private func restorePlaybackSession() {
+        guard clapSoundEnabled else { return }
+        ClapSound.shared.prewarm()
     }
 
     /// Where the status returns to when the microphone shuts off: free running

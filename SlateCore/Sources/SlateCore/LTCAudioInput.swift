@@ -67,6 +67,31 @@ public final class LTCAudioInput {
     /// diagnostics screen.
     public private(set) var preferredInputOutcome = "not attempted"
 
+    /// Subtract the hardware capture latency from each frame's host time.
+    ///
+    /// Worth being exact about what this does and does not correct, because the
+    /// two are easy to conflate. A buffer's `AVAudioTime` says when its first
+    /// sample was *captured*, so however long the buffer then sat around before
+    /// reaching us is already accounted for — buffer size and scheduling jitter
+    /// do not bias the jam, which is the whole reason the timestamp is used
+    /// instead of the callback's arrival time.
+    ///
+    /// What the timestamp cannot know is the delay between the signal arriving
+    /// at the physical connector and the converter timestamping it. That is
+    /// hardware, the driver reports it separately, and it is a genuine constant
+    /// bias: without this, the jammed clock sits that far behind the source.
+    ///
+    /// Small — a millisecond or two, well under a frame at any rate — but it is
+    /// free to remove and it only ever points one way.
+    public var compensateInputLatency = true
+
+    /// Hardware capture latency for the current input, in seconds.
+    public private(set) var inputLatencySeconds: Double = 0
+
+    /// Frames in the most recent tap buffer. The requested size is a hint that
+    /// platforms feel free to ignore, so this is the only honest figure.
+    public private(set) var observedBufferFrames: Int = 0
+
     /// Sample index in the decoder's stream at the start of the current buffer.
     private var bufferStartSampleIndex: Double = 0
     private var bufferStartHostTime: Double = 0
@@ -133,15 +158,33 @@ public final class LTCAudioInput {
         }
 
         preferExternalInput(session: session)
+        measureInputLatency()
 
         try startEngine()
         observeRouteChanges()
         #else
         try selectDevice()
+        measureInputLatency()
         try startEngine()
         #endif
 
         isRunning = true
+    }
+
+    /// Ask the platform what the capture hardware's latency is.
+    ///
+    /// Deliberately *excludes* the safety offset and the buffer size, though
+    /// both appear in the driver's numbers. Those describe when the audio
+    /// reaches us, which the buffer timestamp already accounts for. Including
+    /// them here would double-count and push the jam early.
+    private func measureInputLatency() {
+        #if os(iOS)
+        inputLatencySeconds = AVAudioSession.sharedInstance().inputLatency
+        #else
+        guard let device = selectedDevice else { inputLatencySeconds = 0; return }
+        let budget = MacAudioDevices.latencyBudget(device.id)
+        inputLatencySeconds = Double(budget.deviceLatency) / budget.sampleRate
+        #endif
     }
 
     #if os(macOS)
@@ -190,7 +233,12 @@ public final class LTCAudioInput {
             // The frame may have begun in an earlier buffer; a negative offset
             // is fine because the sample clock is continuous across buffers.
             let offsetSamples = result.startSampleIndex - self.bufferStartSampleIndex
-            let hostTime = self.bufferStartHostTime + offsetSamples / format.sampleRate
+            var hostTime = self.bufferStartHostTime + offsetSamples / format.sampleRate
+            if self.compensateInputLatency {
+                // The frame reached the connector this much before the
+                // converter timestamped it.
+                hostTime -= self.inputLatencySeconds
+            }
             self.onReading?(Reading(result: result, hostTime: hostTime))
         }
         self.decoder = decoder
@@ -222,6 +270,7 @@ public final class LTCAudioInput {
 
             self.bufferStartSampleIndex = runningIndex
             self.bufferStartHostTime = AVAudioTime.seconds(forHostTime: when.hostTime)
+            self.observedBufferFrames = Int(buffer.frameLength)
             runningIndex += Double(buffer.frameLength)
 
             var peak: Float = 0
@@ -335,6 +384,8 @@ public final class LTCAudioInput {
         d.preferredInputOutcome = preferredInputOutcome
         if isRunning {
             d.engineInputFormat = engine.inputNode.inputFormat(forBus: 0).description
+            d.observedBufferFrames = observedBufferFrames
+            d.compensatedLatency = compensateInputLatency ? inputLatencySeconds : 0
         }
         return d
     }

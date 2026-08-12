@@ -35,6 +35,10 @@ public struct AudioDiagnostics: Sendable {
     public var engineInputFormat: String?
     public var preferredInputOutcome: String?
     public var probeError: String?
+    /// Frames actually delivered per tap buffer, and the latency subtracted
+    /// from each jam. Only meaningful while capture is running.
+    public var observedBufferFrames: Int?
+    public var compensatedLatency: Double?
 
     public var externalInputs: [Port] { availableInputs.filter(\.isExternal) }
     public var activeInputIsExternal: Bool { activeInputs.contains { $0.isExternal } }
@@ -75,6 +79,13 @@ public struct AudioDiagnostics: Sendable {
         out += "  input channels     \(inputChannelCount)\n"
         out += "  engine format      \(engineInputFormat ?? "—")\n"
         out += "  preferred input    \(preferredInputOutcome ?? "—")\n"
+        if let frames = observedBufferFrames, sessionSampleRate > 0 {
+            out += String(format: "  actual tap buffer  %d frames (%.2f ms)\n",
+                          frames, 1000 * Double(frames) / sessionSampleRate)
+        }
+        if let latency = compensatedLatency {
+            out += String(format: "  jam compensation   %.2f ms subtracted\n", latency * 1000)
+        }
         out += "\nAVAILABLE INPUTS (\(availableInputs.count))\n"
         if availableInputs.isEmpty { out += "  none\n" }
         for p in availableInputs {

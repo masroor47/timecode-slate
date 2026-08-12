@@ -7,6 +7,10 @@ struct SlateView: View {
     @StateObject private var model = SlateViewModel()
     @State private var showSettings = false
     @State private var showDiagnostics = false
+    /// Drives the keyboard's Done button. Without it the only way out of a
+    /// slate field is the return key, which is a poor thing to hunt for with
+    /// a camera waiting.
+    @FocusState private var editingField: Bool
 
     var body: some View {
         ZStack {
@@ -50,6 +54,12 @@ struct SlateView: View {
         }
         .sheet(isPresented: $showSettings) { settingsSheet }
         .sheet(isPresented: $showDiagnostics) { diagnosticsSheet }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { editingField = false }
+            }
+        }
     }
 
     private var header: some View {
@@ -164,6 +174,8 @@ struct SlateView: View {
                 .foregroundStyle(.white)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.characters)
+                .focused($editingField)
+                .submitLabel(.done)
                 .frame(width: width)
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(0.08)))
@@ -261,7 +273,7 @@ struct SlateView: View {
     private var settingsSheet: some View {
         NavigationStack {
             Form {
-                Section("Timecode") {
+                Section {
                     Toggle("Auto-detect frame rate", isOn: $model.autoDetectRate)
                     Picker("Frame rate", selection: $model.rate) {
                         ForEach(TimecodeRate.allCases, id: \.self) { r in
@@ -269,6 +281,16 @@ struct SlateView: View {
                         }
                     }
                     .disabled(model.autoDetectRate)
+                } header: {
+                    Text("Timecode")
+                } footer: {
+                    // Auto-detect defaults on, which greys the picker out. That
+                    // looked like a broken control rather than a disabled one.
+                    Text(model.autoDetectRate
+                         ? "Frame rate is read from the incoming timecode. "
+                           + "Turn auto-detect off to set it by hand."
+                         : "Pin this to the project rate when you know it — "
+                           + "the decoder will not have to infer it.")
                 }
                 Section {
                     Toggle("Audible clap", isOn: $model.clapSoundEnabled)
