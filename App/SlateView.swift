@@ -52,6 +52,11 @@ struct SlateView: View {
         }
         .sheet(isPresented: $showSettings) { settingsSheet }
         .sheet(isPresented: $showDiagnostics) { diagnosticsSheet }
+        // A sheet covers the slate, so there is nothing to redraw — and leaving
+        // the display link running rebuilds the sheet's Form 24 times a second,
+        // which is what stopped the pickers working on device.
+        .onChange(of: showSettings) { _, open in model.setDisplayPaused(open) }
+        .onChange(of: showDiagnostics) { _, open in model.setDisplayPaused(open) }
     }
 
     /// The previous dark layout, kept only until the new face has been used on
@@ -440,6 +445,17 @@ struct SlateView: View {
                             .font(.system(size: 12, design: .monospaced))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("CLAP")
+                                .font(.system(size: 11, weight: .semibold))
+                                .tracking(1.2)
+                                .foregroundStyle(.secondary)
+                            Text(ClapSound.shared.statusDescription)
+                                .font(.system(size: 12, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     } else if model.diagnosticsProbeRunning {
                         ProgressView("Probing audio session…")
                             .frame(maxWidth: .infinity)

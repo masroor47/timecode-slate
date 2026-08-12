@@ -410,6 +410,21 @@ final class SlateViewModel: ObservableObject {
     ///
     /// Note ProMotion also needs `CADisableMinimumFrameDurationOnPhone` in
     /// Info.plist; without it iOS caps third-party apps at 60 Hz.
+    /// Stop driving the slate while a sheet covers it.
+    ///
+    /// This is not an optimisation. The slate republishes at the display rate,
+    /// and any view observing this object — the settings sheet does — is rebuilt
+    /// with it, about 24 times a second once the clock is running. A `Picker`
+    /// cannot survive its `Form` being torn down and rebuilt underneath it: the
+    /// menu loses its separators and taps select nothing. It only showed on
+    /// device because the simulator's clock and display link are lazier.
+    ///
+    /// The clock is derived from host time, so nothing drifts while paused; the
+    /// display simply catches up on resume.
+    func setDisplayPaused(_ paused: Bool) {
+        displayLink?.isPaused = paused
+    }
+
     private func startDisplayTimer() {
         let proxy = DisplayLinkProxy { [weak self] link in
             self?.tick(atHostTime: link.targetTimestamp)

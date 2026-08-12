@@ -29,12 +29,53 @@ final class ClapSound {
     private let node = AVAudioPlayerNode()
     private let buffer: AVAudioPCMBuffer?
 
+    private var attached = false
+    /// Last engine failure, surfaced on the diagnostics sheet. Silence is very
+    /// hard to debug on a device you cannot attach a console to.
+    private(set) var lastError: String?
+
     private init() {
         buffer = Self.renderBuffer()
-        if let buffer {
+        ensureGraph()
+        // Deactivating the audio session — which capture does on every jam,
+        // taken or cancelled — does not merely stop the engine on a real
+        // device: it invalidates the graph, and the node's connection to the
+        // mixer goes with it. Restarting alone then yields silence, which is
+        // why this was device-only and invisible in the simulator.
+        NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in ClapSound.shared.recover() }
+        }
+    }
+
+    /// Attach and connect the player, if that is not already true.
+    private func ensureGraph() {
+        guard let buffer else { return }
+        if !attached {
             engine.attach(node)
+            attached = true
+        }
+        if engine.outputConnectionPoints(for: node, outputBus: 0).isEmpty {
             engine.connect(node, to: engine.mainMixerNode, format: buffer.format)
         }
+    }
+
+    private func recover() {
+        ensureGraph()
+        start()
+    }
+
+    /// Engine state in words, for the diagnostics sheet.
+    var statusDescription: String {
+        var parts = ["engine \(engine.isRunning ? "running" : "stopped")",
+                     "player \(node.isPlaying ? "playing" : "idle")",
+                     engine.outputConnectionPoints(for: node, outputBus: 0).isEmpty
+                        ? "NOT connected" : "connected"]
+        if let lastError { parts.append("last error: \(lastError)") }
+        return parts.joined(separator: ", ")
     }
 
     /// Claim the audio route and spin the engine up ahead of time.
@@ -68,9 +109,18 @@ final class ClapSound {
     /// short-circuited, and buffers were scheduled onto a dead engine.
     private func start() {
         guard buffer != nil else { return }
+        // Rebuild the graph first — after a session deactivation the node can
+        // still be attached while its connection to the mixer has gone.
+        ensureGraph()
         if !engine.isRunning {
             engine.prepare()
-            try? engine.start()
+            do {
+                try engine.start()
+                lastError = nil
+            } catch {
+                lastError = error.localizedDescription
+                return
+            }
         }
         // The node runs continuously and idles silently; scheduled buffers then
         // fire at their appointed time rather than "whenever play() gets
