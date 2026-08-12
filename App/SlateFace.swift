@@ -62,7 +62,9 @@ struct SlateFace: View {
     var body: some View {
         GeometryReader { geo in
             let u = geo.size.height / 100
-            let rule = max(1, 0.5 * u)
+            // Thin rules. They only have to read as divisions; any heavier and
+            // they eat height the values want.
+            let rule = max(1, 0.3 * u)
 
             VStack(spacing: 0) {
                 sticks(u: u)
@@ -129,7 +131,7 @@ struct SlateFace: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 3 * u)
-        .padding(.vertical, 1 * u)
+        .padding(.vertical, 0.5 * u)
     }
 
     private func take(u: CGFloat) -> some View {
@@ -149,7 +151,7 @@ struct SlateFace: View {
             cell("Take", u: u) {
                 HStack(spacing: 1.5 * u) {
                     Text("\(model.info.take)")
-                        .font(.system(size: 20 * u, weight: .bold))
+                        .font(.system(size: 25 * u, weight: .bold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.4)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -167,33 +169,38 @@ struct SlateFace: View {
     /// value gets the cell's full height rather than sharing it with a caption.
     private func cell<Content: View>(_ title: String, u: CGFloat,
                                      @ViewBuilder content: () -> Content) -> some View {
-        HStack(spacing: 1.5 * u) {
+        HStack(spacing: 1.2 * u) {
             verticalLabel(title, u: u)
             content()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.trailing, 2 * u)
+        .padding(.trailing, 1.5 * u)
     }
 
+    /// Letters stacked one above the next, read top to bottom — not a rotated
+    /// word. A rotated label makes you tilt your head; a stacked one stays
+    /// upright, which is what a slate wants when it is read at a glance from
+    /// whatever angle the camera happens to be at.
     private func verticalLabel(_ text: String, u: CGFloat) -> some View {
-        Text(text.uppercased())
-            .font(.system(size: 3 * u, weight: .semibold))
-            .tracking(3 * u * 0.18)
-            .foregroundStyle(Self.inkFaint)
-            // Rotation does not change a view's layout size, so the text is
-            // fixed at its natural width first and then given a frame with the
-            // rotated dimensions.
-            .fixedSize()
-            .rotationEffect(.degrees(-90))
-            .frame(width: 5 * u)
-            .frame(maxHeight: .infinity)
-            .padding(.leading, 1.2 * u)
+        let letters = Array(text.uppercased())
+        return VStack(spacing: 0.35 * u) {
+            // Indices rather than the characters themselves: "SCENE" repeats E,
+            // and duplicate ids silently drop rows.
+            ForEach(letters.indices, id: \.self) { i in
+                Text(String(letters[i]))
+                    .font(.system(size: 3.2 * u, weight: .semibold))
+                    .fixedSize()
+            }
+        }
+        .foregroundStyle(Self.inkFaint)
+        .frame(maxHeight: .infinity)
+        .padding(.leading, 1.2 * u)
     }
 
     private func slateField(text: Binding<String>, u: CGFloat) -> some View {
         TextField("", text: text)
             .textFieldStyle(.plain)
-            .font(.system(size: 20 * u, weight: .bold))
+            .font(.system(size: 25 * u, weight: .bold))
             .autocorrectionDisabled()
             .textInputAutocapitalization(.characters)
             .lineLimit(1)
@@ -350,7 +357,7 @@ struct SlateFace: View {
     }
 
     private func vRule(_ u: CGFloat) -> some View {
-        Rectangle().fill(Self.ink).frame(width: max(1, 0.5 * u))
+        Rectangle().fill(Self.ink).frame(width: max(1, 0.3 * u))
     }
 
     // MARK: - Colour
