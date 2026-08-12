@@ -60,14 +60,40 @@ struct SlateFace: View {
     private let footRow:   CGFloat = 13
 
     var body: some View {
+        // Note this reader deliberately stays *inside* the safe area: adding
+        // .ignoresSafeArea() to it zeroes geo.safeAreaInsets, and then there is
+        // nothing left to tell you where the hardware actually is. Expansion is
+        // done with negative padding instead.
         GeometryReader { geo in
-            let u = geo.size.height / 100
+            // Both horizontal insets are kept in full. iOS reports them
+            // *symmetrically* in landscape, so there is no way to tell from
+            // them which edge the Dynamic Island is actually on — reclaiming
+            // the "empty" side is a coin flip, and losing it puts hardware over
+            // the take steppers. The room is taken vertically and from internal
+            // padding instead, which is reliable.
+            let insets = geo.safeAreaInsets
+            let growLeading: CGFloat = 0
+            let growTrailing: CGFloat = 0
+            let growTop      = max(insets.top - 2, 0)
+            let growBottom   = max(insets.bottom - 2, 0)
+
+            // What is still reserved once we have grown — the sticks bleed by
+            // exactly this much to reach the physical edges.
+            let keepLeading  = insets.leading - growLeading
+            let keepTrailing = insets.trailing - growTrailing
+
             // Thin rules. They only have to read as divisions; any heavier and
             // they eat height the values want.
-            let rule = max(1, 0.3 * u)
+            let rule: CGFloat = 2
+            // The three rules are laid out *between* the rows, so their height
+            // has to come out of the budget before it is divided into units.
+            // Leaving them out made the rows total slightly more than the
+            // screen, so the slate overflowed instead of fitting it.
+            let usable = geo.size.height + growTop + growBottom - rule * 3
+            let u = usable / 100
 
             VStack(spacing: 0) {
-                sticks(u: u)
+                sticks(u: u, bleedLeading: keepLeading, bleedTrailing: keepTrailing)
 
                 if layout == .metaTop {
                     meta(u: u).frame(height: metaRow * u)
@@ -86,13 +112,14 @@ struct SlateFace: View {
 
                 foot(u: u).frame(height: footRow * u)
             }
-            .background(faceColor)
+            // Negative padding grows the slate back out over the safe area on
+            // the edges where nothing is in the way.
+            .padding(.leading, -growLeading)
+            .padding(.trailing, -growTrailing)
+            .padding(.top, -growTop)
+            .padding(.bottom, -growBottom)
             .foregroundStyle(Self.ink)
         }
-        // The white runs edge to edge, but the *content* stays inside the safe
-        // area. In landscape the Dynamic Island sits over the leading edge, and
-        // ignoring the safe area outright put it straight through the first
-        // digit of the timecode and the SCENE label.
         .background(faceColor.ignoresSafeArea())
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -107,11 +134,14 @@ struct SlateFace: View {
     /// Full-bleed, unlike everything else: on a real slate the sticks run the
     /// whole width of the board, and inset chevrons look like a screenshot of a
     /// slate rather than a slate.
-    private func sticks(u: CGFloat) -> some View {
+    private func sticks(u: CGFloat, bleedLeading: CGFloat, bleedTrailing: CGFloat) -> some View {
         ClapperSticks(isClosed: !model.isClapPending, barHeight: 6.6 * u)
             .frame(height: sticksRow * u)
             .clipped()
-            .padding(.horizontal, -60)
+            // Cancel the outer inset so the chevrons still reach both physical
+            // edges of the display.
+            .padding(.leading, -bleedLeading)
+            .padding(.trailing, -bleedTrailing)
             .contentShape(Rectangle())
             .onTapGesture(perform: onTapSticks)
             .animation(nil, value: model.isClapPending)
@@ -127,7 +157,7 @@ struct SlateFace: View {
     private func timecode(u: CGFloat) -> some View {
         ZStack {
             Text(showingUserBits ? model.userBitsDisplay : model.displayTimecode)
-                .font(.system(size: 26 * u, weight: .bold, design: .monospaced))
+                .font(.system(size: 28 * u, weight: .bold, design: .monospaced))
                 .monospacedDigit()
                 .minimumScaleFactor(0.4)
                 .lineLimit(1)
@@ -144,7 +174,7 @@ struct SlateFace: View {
             }
         }
         .padding(.horizontal, 2.5 * u)
-        .padding(.vertical, 0.5 * u)
+        .padding(.vertical, 0.3 * u)
     }
 
     private func take(u: CGFloat) -> some View {
@@ -164,7 +194,7 @@ struct SlateFace: View {
             cell("Take", u: u) {
                 HStack(spacing: 1.5 * u) {
                     Text("\(model.info.take)")
-                        .font(.system(size: 25 * u, weight: .bold))
+                        .font(.system(size: 26 * u, weight: .bold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.4)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -213,7 +243,7 @@ struct SlateFace: View {
     private func slateField(text: Binding<String>, u: CGFloat) -> some View {
         TextField("", text: text)
             .textFieldStyle(.plain)
-            .font(.system(size: 25 * u, weight: .bold))
+            .font(.system(size: 26 * u, weight: .bold))
             .autocorrectionDisabled()
             .textInputAutocapitalization(.characters)
             .lineLimit(1)
@@ -238,7 +268,7 @@ struct SlateFace: View {
             VStack(alignment: .leading, spacing: 0.5 * u) {
                 label("Roll", u: u)
                 Text(display(model.info.roll))
-                    .font(.system(size: 5 * u, weight: .bold))
+                    .font(.system(size: 5.6 * u, weight: .bold))
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -246,7 +276,7 @@ struct SlateFace: View {
             VStack(alignment: .leading, spacing: 0.5 * u) {
                 label("Sound", u: u)
                 Text(display(model.info.soundRoll))
-                    .font(.system(size: 5 * u, weight: .bold))
+                    .font(.system(size: 5.6 * u, weight: .bold))
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -320,7 +350,7 @@ struct SlateFace: View {
         VStack(alignment: .leading, spacing: 0.5 * u) {
             label(title, u: u)
             Text(display(value))
-                .font(.system(size: 5.4 * u, weight: .bold))
+                .font(.system(size: 6 * u, weight: .bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
         }
