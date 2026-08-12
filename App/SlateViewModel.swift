@@ -56,9 +56,19 @@ final class SlateViewModel: ObservableObject {
     @Published private(set) var heldEvent: ClapEvent?
     @Published private(set) var status: SyncStatus = .idle
     @Published private(set) var inputName = "—"
+    #if os(iOS)
+    /// Last input snapshot, for the diagnostics sheet. Nil until asked for.
+    @Published private(set) var diagnostics: AudioDiagnostics?
+    @Published private(set) var diagnosticsProbeRunning = false
+    #endif
     @Published private(set) var level: Float = 0
     /// Which half of the hold the frozen slate is showing.
     @Published private(set) var holdPhase: HoldPhase = .timecode
+    /// True for the first couple of frames after the sticks meet. The whole
+    /// face inverts for exactly this long, so the sync point is one
+    /// unmistakable frame rather than something to be inferred.
+    @Published private(set) var isFlashing = false
+    private var flashUntilHostTime: Double?
     /// User bits exactly as decoded at the last jam, or nil if we never jammed.
     @Published private(set) var decodedUserBits: String?
 
@@ -175,6 +185,7 @@ final class SlateViewModel: ObservableObject {
         armedForJam = false
         armedAtHostTime = nil
         audio.stop()
+        restorePlaybackSession()
         level = 0
         inputName = "—"
         if let message {
@@ -183,6 +194,17 @@ final class SlateViewModel: ObservableObject {
             status = restingStatus()
         }
         #endif
+    }
+
+    /// Hand the audio route back to playback after capture has finished with it.
+    ///
+    /// `audio.stop()` deactivates the session, which leaves the clap player with
+    /// nothing to sound through. The successful-jam path already did this; the
+    /// cancel and timeout paths did not, so arming a jam and backing out left
+    /// the slate silent for the rest of the session.
+    private func restorePlaybackSession() {
+        guard clapSoundEnabled else { return }
+        ClapSound.shared.prewarm()
     }
 
     /// Where the status returns to when the microphone shuts off: free running
@@ -228,6 +250,33 @@ final class SlateViewModel: ObservableObject {
             armedForJam = false
             armedAtHostTime = nil
             status = .error(error.localizedDescription)
+        }
+    }
+
+    // MARK: - Input diagnostics
+
+    /// Refresh the input snapshot behind the diagnostics sheet.
+    ///
+    /// While capture is running this is a free read of live state. At rest it
+    /// has to stand a recording session up to learn anything at all, and that
+    /// is `mediaserverd` IPC — so it goes off the main thread, or it stalls the
+    /// display link and freezes the slate on a stale timecode.
+    func refreshDiagnostics() {
+        if audio.isRunning {
+            diagnostics = audio.diagnostics()
+            return
+        }
+        diagnosticsProbeRunning = true
+        Task.detached(priority: .userInitiated) {
+            let probed = AudioDiagnostics.probe()
+            await MainActor.run {
+                self.diagnostics = probed
+                self.diagnosticsProbeRunning = false
+                // The probe left the session deactivated; put the clap player
+                // back on a playback route so the next clap has nothing slow
+                // left to do.
+                if self.clapSoundEnabled { ClapSound.shared.prewarm() }
+            }
         }
     }
 
@@ -304,7 +353,12 @@ final class SlateViewModel: ObservableObject {
     private func performPendingClap(atHostTime host: Double) {
         guard let due = scheduledClapHostTime, host >= due else { return }
         scheduledClapHostTime = nil
-        slate.clap(timecode: clock.timecode(atHostTime: host), atHostTime: host)
+        let clapped = clock.timecode(atHostTime: host)
+        // Two frames of the clapped rate, so the flash means the same thing at
+        // 24 fps as at 60 — long enough that a camera cannot fall between it,
+        // short enough that it reads as a flash rather than a state.
+        flashUntilHostTime = host + 2 / clapped.rate.actualFPS
+        slate.clap(timecode: clapped, atHostTime: host)
         // Note there is deliberately no audio call here — the crack was
         // scheduled against the audio clock when the clap was armed.
     }
@@ -356,6 +410,21 @@ final class SlateViewModel: ObservableObject {
     ///
     /// Note ProMotion also needs `CADisableMinimumFrameDurationOnPhone` in
     /// Info.plist; without it iOS caps third-party apps at 60 Hz.
+    /// Stop driving the slate while a sheet covers it.
+    ///
+    /// This is not an optimisation. The slate republishes at the display rate,
+    /// and any view observing this object — the settings sheet does — is rebuilt
+    /// with it, about 24 times a second once the clock is running. A `Picker`
+    /// cannot survive its `Form` being torn down and rebuilt underneath it: the
+    /// menu loses its separators and taps select nothing. It only showed on
+    /// device because the simulator's clock and display link are lazier.
+    ///
+    /// The clock is derived from host time, so nothing drifts while paused; the
+    /// display simply catches up on resume.
+    func setDisplayPaused(_ paused: Bool) {
+        displayLink?.isPaused = paused
+    }
+
     private func startDisplayTimer() {
         let proxy = DisplayLinkProxy { [weak self] link in
             self?.tick(atHostTime: link.targetTimestamp)
@@ -393,6 +462,10 @@ final class SlateViewModel: ObservableObject {
             ? (heldEvent?.timecode.description ?? displayTimecode)
             : clock.timecode(atHostTime: host).description
         if shown != displayTimecode { displayTimecode = shown }
+
+        let flashing = flashUntilHostTime.map { host < $0 } ?? false
+        if flashing != isFlashing { isFlashing = flashing }
+        if !flashing { flashUntilHostTime = nil }
 
         // Drop out of "locked" once the signal stops arriving.
         if let last = lastLockHostTime, host - last > 0.5 {

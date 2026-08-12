@@ -150,14 +150,45 @@ The iOS Simulator uses the Mac's microphone, so this works there too.
 additive noise, low level, hard clipping, band limiting, capture-clock error —
 and reports jam timing precision and throughput.
 
+## Testing *with* timecode hardware
+
+`ltclisten` decodes a live input on macOS, through the same `LTCAudioInput` the
+app uses, so a pass exercises the real capture path rather than a stand-in.
+
+```bash
+cd SlateCore
+swift run -c release ltclisten --list
+swift run -c release ltclisten --device Microphone --rate 24 --seconds 10
+```
+
+It reports the driver's input latency budget, then per-second decode progress,
+then a verdict. The number to watch is **DROPS**: capture that silently loses
+buffers produces failed frames and discontinuities that are indistinguishable
+from a bad analogue signal, and conflating the two wastes a lot of time. This
+checks `AVAudioTime.sampleTime` continuity so it can tell you which one you have.
+
 ## Status
 
 The decoder, clock, slate logic and UI are implemented and tested, and the app
 runs on device.
 
-The **analogue input path is not yet verified against a hardware timecode
-generator**. Everything above the input stage works; whether a given signal
-physically reaches iOS at a usable level depends on the interface used to get it
-there, and that remains the one substantial unknown.
+The **input path is verified against real timecode hardware, on the phone**. A
+Zoom F3 with a TCA-1, through a TRS→TRRS adapter into Apple's 3.5 mm → USB-C
+dongle, enumerates on iOS and jams the clock correctly. The same signal decodes
+on macOS at 100% frame yield with no dropped capture and no discontinuities,
+measured with `ltclisten`, which drives the same `LTCAudioInput` the phone uses.
+
+Worth recording, because it is counter-intuitive: the signal arrives **clipped
+hard against both rails** and decodes perfectly anyway. LTC is not audio. It is a
+square wave, and the decoder times zero crossings rather than amplitude, so
+overdriving the input costs nothing. The attenuator that a level calculation says
+is mandatory turns out not to be.
+
+Not every interface works. A USB-C adapter presenting **USB Audio Class 2.0 at
+Full Speed** was accepted by macOS and silently refused by iOS, which is stricter
+about what it will bind an audio driver to. Since a USB-C interface occupies the
+phone's only port and leaves nothing for a debugger, the app carries an on-screen
+input diagnostics sheet that distinguishes "iOS never enumerated it" from "iOS
+enumerated it and we failed to select it".
 
 Also not done: take-log export UI, settings persistence.

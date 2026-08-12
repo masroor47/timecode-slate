@@ -25,17 +25,79 @@ import Foundation
 final class ClapSound {
     static let shared = ClapSound()
 
-    private let engine = AVAudioEngine()
-    private let node = AVAudioPlayerNode()
+    private var engine = AVAudioEngine()
+    private var node = AVAudioPlayerNode()
     private let buffer: AVAudioPCMBuffer?
-    private var isRunning = false
+    private var configObserver: NSObjectProtocol?
+
+    private var attached = false
+    /// Last engine failure, surfaced on the diagnostics sheet. Silence is very
+    /// hard to debug on a device you cannot attach a console to.
+    private(set) var lastError: String?
 
     private init() {
         buffer = Self.renderBuffer()
-        if let buffer {
+        ensureGraph()
+        // Deactivating the audio session — which capture does on every jam,
+        // taken or cancelled — does not merely stop the engine on a real
+        // device: it invalidates the graph, and the node's connection to the
+        // mixer goes with it. Restarting alone then yields silence, which is
+        // why this was device-only and invisible in the simulator.
+        observeConfigurationChanges()
+    }
+
+    private func observeConfigurationChanges() {
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in ClapSound.shared.recover() }
+        }
+    }
+
+    /// Throw the engine away and build a new one.
+    ///
+    /// An `AVAudioEngine` is bound to the audio session it was started against.
+    /// Once that session has been pulled out from under it the engine can end up
+    /// permanently unable to start again — attached, connected, and refusing to
+    /// run, which is exactly what the diagnostics reported. Nothing recovers it
+    /// short of a fresh instance.
+    private func rebuild() {
+        engine.stop()
+        engine = AVAudioEngine()
+        node = AVAudioPlayerNode()
+        attached = false
+        ensureGraph()
+        observeConfigurationChanges()
+    }
+
+    /// Attach and connect the player, if that is not already true.
+    private func ensureGraph() {
+        guard let buffer else { return }
+        if !attached {
             engine.attach(node)
+            attached = true
+        }
+        if engine.outputConnectionPoints(for: node, outputBus: 0).isEmpty {
             engine.connect(node, to: engine.mainMixerNode, format: buffer.format)
         }
+    }
+
+    private func recover() {
+        ensureGraph()
+        start()
+    }
+
+    /// Engine state in words, for the diagnostics sheet.
+    var statusDescription: String {
+        var parts = ["engine \(engine.isRunning ? "running" : "stopped")",
+                     "player \(node.isPlaying ? "playing" : "idle")",
+                     engine.outputConnectionPoints(for: node, outputBus: 0).isEmpty
+                        ? "NOT connected" : "connected"]
+        if let lastError { parts.append("last error: \(lastError)") }
+        return parts.joined(separator: ", ")
     }
 
     /// Claim the audio route and spin the engine up ahead of time.
@@ -59,18 +121,45 @@ final class ClapSound {
         }
     }
 
+    /// Bring the engine up, or back up.
+    ///
+    /// **State is read from the engine, never cached.** This used to keep an
+    /// `isRunning` flag, which was wrong in a way that silenced the clap for the
+    /// rest of a session: deactivating the audio session — which is exactly what
+    /// `LTCAudioInput.stop()` does after a jam is taken or cancelled — stops the
+    /// engine underneath us, and the flag stayed `true`. Every later call then
+    /// short-circuited, and buffers were scheduled onto a dead engine.
     private func start() {
-        guard !isRunning, buffer != nil else { return }
-        engine.prepare()
-        do {
-            try engine.start()
-            // The node runs continuously and idles silently; scheduled buffers
-            // then fire at their appointed time rather than "whenever play()
-            // gets called".
+        guard buffer != nil else { return }
+        // Rebuild the graph first — after a session deactivation the node can
+        // still be attached while its connection to the mixer has gone.
+        ensureGraph()
+        if !engine.isRunning {
+            engine.prepare()
+            do {
+                try engine.start()
+                lastError = nil
+            } catch {
+                // One retry on a clean engine. A failure here is almost always
+                // an engine outliving the session it was started against, and a
+                // new one starts where the old one never will again.
+                lastError = "start failed (\(error.localizedDescription)); rebuilding"
+                rebuild()
+                engine.prepare()
+                do {
+                    try engine.start()
+                    lastError = nil
+                } catch {
+                    lastError = "rebuild failed: \(error.localizedDescription)"
+                    return
+                }
+            }
+        }
+        // The node runs continuously and idles silently; scheduled buffers then
+        // fire at their appointed time rather than "whenever play() gets
+        // called". It stops along with the engine, so it needs restarting too.
+        if engine.isRunning, !node.isPlaying {
             node.play()
-            isRunning = true
-        } catch {
-            isRunning = false
         }
     }
 
@@ -79,8 +168,8 @@ final class ClapSound {
     /// Output latency is subtracted, because the target is when the sound
     /// reaches the room, not when it enters the render graph.
     func schedule(atHostTime hostTime: Double) {
-        if !isRunning { start() }
-        guard isRunning, let buffer else { return }
+        start()
+        guard engine.isRunning, let buffer else { return }
 
         let latency = AVAudioSession.sharedInstance().outputLatency
             + engine.outputNode.presentationLatency
