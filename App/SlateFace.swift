@@ -248,11 +248,17 @@ struct SlateFace: View {
                 HStack(spacing: 1.5 * u) {
                     fillingText("\(model.info.take)", size: 33 * u, weight: .bold)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                    VStack(spacing: 0.8 * u) {
+                    // The steppers sit inside the cell, not against its rules —
+                    // borders meeting borders reads as a mistake.
+                    // Fixed height, not maxHeight: .infinity. The take number is
+                    // deliberately taller than its row — that is what makes it
+                    // fill the cell — which inflates this HStack, and anything
+                    // stretching to fit then gets clipped flush against the
+                    // rules. Padding cannot win against a stretched frame.
+                    VStack(spacing: 1.6 * u) {
                         stepper("plus", u: u) { model.info.take += 1 }
                         stepper("minus", u: u) { model.info.take = max(1, model.info.take - 1) }
                     }
-                    .padding(.vertical, 1.2 * u)
                 }
             }
         }
@@ -394,7 +400,7 @@ struct SlateFace: View {
             content()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.trailing, 1.5 * u)
+        .padding(.trailing, 4 * u)
     }
 
     /// Letters stacked one above the next, read top to bottom — not a rotated
@@ -436,8 +442,7 @@ struct SlateFace: View {
             Image(systemName: symbol)
                 .font(.system(size: 4 * u, weight: .bold))
                 .foregroundStyle(inkColor)
-                .frame(width: 11 * u)
-                .frame(maxHeight: .infinity)
+                .frame(width: 11 * u, height: 10.5 * u)
                 .contentShape(Rectangle())
                 .background(RoundedRectangle(cornerRadius: 1 * u)
                     .stroke(inkColor, lineWidth: max(1, 0.3 * u)))
