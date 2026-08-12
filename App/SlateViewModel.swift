@@ -56,6 +56,11 @@ final class SlateViewModel: ObservableObject {
     @Published private(set) var heldEvent: ClapEvent?
     @Published private(set) var status: SyncStatus = .idle
     @Published private(set) var inputName = "—"
+    #if os(iOS)
+    /// Last input snapshot, for the diagnostics sheet. Nil until asked for.
+    @Published private(set) var diagnostics: AudioDiagnostics?
+    @Published private(set) var diagnosticsProbeRunning = false
+    #endif
     @Published private(set) var level: Float = 0
     /// Which half of the hold the frozen slate is showing.
     @Published private(set) var holdPhase: HoldPhase = .timecode
@@ -228,6 +233,33 @@ final class SlateViewModel: ObservableObject {
             armedForJam = false
             armedAtHostTime = nil
             status = .error(error.localizedDescription)
+        }
+    }
+
+    // MARK: - Input diagnostics
+
+    /// Refresh the input snapshot behind the diagnostics sheet.
+    ///
+    /// While capture is running this is a free read of live state. At rest it
+    /// has to stand a recording session up to learn anything at all, and that
+    /// is `mediaserverd` IPC — so it goes off the main thread, or it stalls the
+    /// display link and freezes the slate on a stale timecode.
+    func refreshDiagnostics() {
+        if audio.isRunning {
+            diagnostics = audio.diagnostics()
+            return
+        }
+        diagnosticsProbeRunning = true
+        Task.detached(priority: .userInitiated) {
+            let probed = AudioDiagnostics.probe()
+            await MainActor.run {
+                self.diagnostics = probed
+                self.diagnosticsProbeRunning = false
+                // The probe left the session deactivated; put the clap player
+                // back on a playback route so the next clap has nothing slow
+                // left to do.
+                if self.clapSoundEnabled { ClapSound.shared.prewarm() }
+            }
         }
     }
 

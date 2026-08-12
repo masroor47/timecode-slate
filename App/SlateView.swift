@@ -6,6 +6,7 @@ import SlateCore
 struct SlateView: View {
     @StateObject private var model = SlateViewModel()
     @State private var showSettings = false
+    @State private var showDiagnostics = false
 
     var body: some View {
         ZStack {
@@ -48,6 +49,7 @@ struct SlateView: View {
             model.stopListening()
         }
         .sheet(isPresented: $showSettings) { settingsSheet }
+        .sheet(isPresented: $showDiagnostics) { diagnosticsSheet }
     }
 
     private var header: some View {
@@ -59,10 +61,22 @@ struct SlateView: View {
                 .font(.system(size: 15, weight: .semibold, design: .monospaced))
                 .foregroundStyle(model.status.color)
 
-            Text(model.inputName)
+            // Tapping the input name opens the diagnostics. The phone has one
+            // USB-C port, so when a timecode interface is in it there is no
+            // cable left for a debugger — every routing question has to be
+            // answerable on the slate's own screen.
+            Button {
+                model.refreshDiagnostics()
+                showDiagnostics = true
+            } label: {
+                HStack(spacing: 4) {
+                    Text(model.inputName)
+                        .lineLimit(1)
+                    Image(systemName: "info.circle")
+                }
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
+            }
 
             // Input level meter — confirms signal is arriving before you rely on it.
             GeometryReader { geo in
@@ -286,5 +300,66 @@ struct SlateView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Input diagnostics
+
+    /// What iOS thinks is plugged in, readable on the phone itself.
+    ///
+    /// The verdict line at the top is the whole point: it separates "iOS never
+    /// enumerated the interface", which is a power or class-compliance problem
+    /// upstream of this app, from "iOS enumerated it and we failed to select
+    /// it", which is ours.
+    private var diagnosticsSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let d = model.diagnostics {
+                        Text(d.verdict)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(verdictColor(d))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(RoundedRectangle(cornerRadius: 10)
+                                .fill(verdictColor(d).opacity(0.12)))
+
+                        Text(d.report)
+                            .font(.system(size: 12, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else if model.diagnosticsProbeRunning {
+                        ProgressView("Probing audio session…")
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text("No snapshot yet.")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text("Plug the interface in, then Refresh. If it only "
+                         + "appears while armed, arm JAM first and refresh again.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .padding()
+            }
+            .navigationTitle("Input Diagnostics")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Refresh") { model.refreshDiagnostics() }
+                        .disabled(model.diagnosticsProbeRunning)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showDiagnostics = false }
+                }
+            }
+        }
+    }
+
+    private func verdictColor(_ d: AudioDiagnostics) -> Color {
+        if d.probeError != nil { return .red }
+        if d.activeInputIsExternal { return .green }
+        if d.externalInputs.isEmpty { return .orange }
+        return .yellow
     }
 }

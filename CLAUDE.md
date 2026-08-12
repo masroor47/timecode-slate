@@ -15,6 +15,7 @@ SlateCore/          Swift package — all the real logic, platform-independent
   Sources/SlateCore/  decoder, encoder, timecode maths, clock, slate state
   Sources/ltcbench/   decoder characterisation harness
   Sources/ltcplay/    LTC signal generator — test without hardware
+  Sources/ltclisten/  live capture from real hardware (macOS only)
   Tests/              51 tests
 App/                SwiftUI app sources (synchronized folder group)
 TimecodeSlate.xcodeproj
@@ -36,6 +37,11 @@ cd SlateCore && swift test
 
 # Decoder characterisation numbers
 cd SlateCore && swift run -c release ltcbench
+
+# Live decode from an attached interface (macOS). Runs the app's own
+# LTCAudioInput, so a PASS here exercises the real capture path.
+cd SlateCore && swift run -c release ltclisten --list
+cd SlateCore && swift run -c release ltclisten --device Microphone --rate 24 --seconds 10
 
 # Build for the phone
 xcodebuild -project TimecodeSlate.xcodeproj -scheme TimecodeSlate \
@@ -80,12 +86,55 @@ that is correct, and the README explains why).
 
 The **simulator uses the Mac's microphone**, so this works on the simulator too.
 
-## The one thing that is still unproven
+## Hardware status
 
-Everything above the analogue input stage is verified. What is *not* verified is
-whether a hardware timecode signal physically reaches iOS at a usable level —
-levels, mic bias, whether a USB-C interface enumerates. That needs an interface
-and a real generator. `NOTES.md` has the specifics.
+**The USB path is proven on macOS.** Zoom F3 → TCA-1 → Tentacle TRS-to-USB-C
+adapter decodes at 100% frame yield, zero drops, zero discontinuities, rate
+correctly detected as `fps24`. Verified with `ltclisten`, which drives the app's
+own `LTCAudioInput`. The adapter enumerates as a USB audio class device,
+`Microphone` by *TTGK Technology*, 2 ch @ 48 kHz, **signal on channel 0**.
+
+Two things about that signal that look like faults and are not:
+
+- **It arrives hard-clipped at 0 dBFS**, ~60% of samples at full scale, because
+  the TCA-1 is 35–40 dB hotter than a mic input. This is harmless. LTC is a
+  square wave and the decoder times zero crossings; clipping a square wave makes
+  it more square. Do not add a pad to "fix" this.
+- **The waveform is rail-to-rail with single-sample edges.** That is what a
+  correct capture looks like here, not a sign of something broken.
+
+**On iOS the working chain is the analogue one.** End to end:
+
+```
+Zoom F3 → TCA-1 (3.5 mm TRS out)
+        → Rode TRS→TRRS adapter
+        → Apple 3.5 mm → USB-C adapter
+        → iPhone
+```
+
+Verified on device: enumerated, jammed, synced. **This is the chain to keep
+working.** Apple's dongle is a plain UAC 1.0 device, which is the most certain
+audio input there is on an iPhone.
+
+Note it works **without an attenuator**, despite §2 of `NOTES.md` calling one
+mandatory. That analysis was about audio levels; LTC is not audio. The signal
+clips hard and decodes fine, for the same reason as above. Do not add a pad
+unless something actually fails.
+
+**The Tentacle TRS-to-USB-C adapter does not work on iOS.** iOS never
+enumerates it — `availableInputs` offers only `MicrophoneBuiltIn`, and Voice
+Memos ignores it too, so this is upstream of this app and not a routing bug.
+Its descriptors say why: **USB Audio Class 2.0 running at Full Speed**
+(`bInterfaceProtocol` 0x20, `Device Speed` 1), an unusual combination that
+macOS's permissive `usbaudiod` accepts and iOS's stricter driver declines.
+Nothing in this codebase can change that. The adapter remains useful as the
+**known-good reference input on the Mac**, which is what `ltclisten` uses.
+
+Debugging any of this on the phone is awkward because a USB-C interface occupies
+the only port, leaving no cable for a debugger. That is why the diagnostics sheet
+is on-screen and copyable rather than logged — tap the input name in the header.
+It is what identified the failure above, and it earns its keep the next time an
+interface is swapped.
 
 ## Hard-won gotchas
 
@@ -113,3 +162,18 @@ Things that cost real debugging time. Do not undo them without reading why.
   fight over).
 - `ltcplay --play` spawns `afplay`; it installs signal handlers so Ctrl-C does
   not leave an orphan playing timecode into the room.
+- **Never diagnose a live input with `ffmpeg -f avfoundation`.** It silently
+  drops buffers — measured losing ~12% of a capture while reporting the full
+  duration elapsed. The result looks exactly like a mangled analogue signal:
+  frames failing to decode, dozens of discontinuities, a plausible-looking
+  bimodal edge histogram. It cost a whole debugging pass. Use `ltclisten`, which
+  checks `AVAudioTime.sampleTime` continuity and will tell you outright.
+- **`installTap` coalesces to 4800-frame (100 ms) buffers on macOS** whatever
+  `bufferSize` you pass. `AVAudioSinkNode` delivers the driver's true IO buffers
+  — measured at 64 frames, 1.33 ms — and is the path to take if capture latency
+  ever matters. Jam *accuracy* does not depend on either, because every frame is
+  timestamped from its buffer's host time.
+- **Input latency is not in the host time.** The driver reports device latency +
+  safety offset (4.42 ms total on this adapter, ~0.1 frame at 24 fps) and a jam
+  is late by exactly that unless it is subtracted. Host-time anchoring does not
+  fix this; it is a separate correction and is **not yet applied**.

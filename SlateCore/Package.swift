@@ -11,6 +11,9 @@ let package = Package(
         .target(name: "SlateCore"),
         .executableTarget(name: "ltcbench", dependencies: ["SlateCore"]),
         .executableTarget(name: "ltcplay", dependencies: ["SlateCore"]),
+        // macOS only: captures from real hardware, so it needs a machine with
+        // an audio interface attached rather than a simulator.
+        .executableTarget(name: "ltclisten", dependencies: ["SlateCore"]),
         .testTarget(name: "SlateCoreTests", dependencies: ["SlateCore"]),
     ]
 )

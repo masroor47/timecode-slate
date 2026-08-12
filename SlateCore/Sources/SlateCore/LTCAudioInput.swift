@@ -1,6 +1,8 @@
-#if os(iOS)
 import AVFoundation
 import Foundation
+#if os(macOS)
+import CoreAudio
+#endif
 
 /// Captures audio from whatever input is attached and feeds it to an LTCDecoder,
 /// preserving the host-clock timing needed for an accurate jam.
@@ -18,18 +20,27 @@ import Foundation
 ///    mach timebase as `CACurrentMediaTime()`. Anchoring to that, rather than
 ///    to when our callback happened to run, keeps jam accuracy independent of
 ///    buffer size and scheduling jitter.
+///
+/// Runs on macOS as well as iOS, so the input path can be exercised against
+/// real timecode hardware from the command line — see the `ltclisten` tool.
+/// Everything from the engine down is shared; only input *selection* differs,
+/// because iOS chooses ports through `AVAudioSession` and macOS chooses devices
+/// through CoreAudio, and there is no honest way to paper over that.
 public final class LTCAudioInput {
 
     public enum InputError: Error, LocalizedError {
         case sessionConfigurationFailed(Error)
         case engineStartFailed(Error)
         case noInputAvailable
+        case deviceSelectionFailed(String, OSStatus)
 
         public var errorDescription: String? {
             switch self {
             case .sessionConfigurationFailed(let e): return "Audio session setup failed: \(e.localizedDescription)"
             case .engineStartFailed(let e): return "Audio engine failed to start: \(e.localizedDescription)"
             case .noInputAvailable: return "No audio input is available."
+            case .deviceSelectionFailed(let name, let status):
+                return "Could not select input device '\(name)' (OSStatus \(status))."
             }
         }
     }
@@ -52,17 +63,29 @@ public final class LTCAudioInput {
     private let engine = AVAudioEngine()
     public private(set) var decoder: LTCDecoder?
     public private(set) var isRunning = false
+    /// What `preferExternalInput` last managed to do, verbatim, for the
+    /// diagnostics screen.
+    public private(set) var preferredInputOutcome = "not attempted"
 
     /// Sample index in the decoder's stream at the start of the current buffer.
     private var bufferStartSampleIndex: Double = 0
     private var bufferStartHostTime: Double = 0
     private var routeObserver: NSObjectProtocol?
 
+    /// Capture continuity. A gap in the driver's sample numbering means audio
+    /// we never received, which corrupts whichever frame straddled it.
+    private var expectedSampleTime: Int64?
+    public private(set) var dropEventCount = 0
+    public private(set) var droppedFrameCount: Int64 = 0
+    /// Fired with the number of frames missed, for a harness that wants to say so.
+    public var onDrop: ((Int64) -> Void)?
+
     public init() {}
 
     /// Ask for microphone access. Without this the first `start()` fails with an
     /// opaque engine error rather than anything a user could act on.
     public static func requestPermission() async -> Bool {
+        #if os(iOS)
         if #available(iOS 17.0, *) {
             return await AVAudioApplication.requestRecordPermission()
         } else {
@@ -72,7 +95,20 @@ public final class LTCAudioInput {
                 }
             }
         }
+        #else
+        return await AVCaptureDevice.requestAccess(for: .audio)
+        #endif
     }
+
+    #if os(macOS)
+    /// Substring of the CoreAudio device name to capture from; nil uses the
+    /// system default input. macOS has no `AVAudioSession`, so the timecode
+    /// interface has to be named rather than merely preferred.
+    public var preferredDeviceMatch: String?
+
+    /// The device `start()` actually selected.
+    public private(set) var selectedDevice: AudioInputDevice?
+    #endif
 
     /// Pin the expected project rate, or nil to auto-detect.
     public var assumedRate: TimecodeRate? {
@@ -82,6 +118,7 @@ public final class LTCAudioInput {
     public func start() throws {
         guard !isRunning else { return }
 
+        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         do {
             // .measurement disables AGC / noise suppression / voice EQ.
@@ -99,8 +136,37 @@ public final class LTCAudioInput {
 
         try startEngine()
         observeRouteChanges()
+        #else
+        try selectDevice()
+        try startEngine()
+        #endif
+
         isRunning = true
     }
+
+    #if os(macOS)
+    /// Point the engine's input unit at the chosen device. Must happen before
+    /// the input format is read, or the format describes the old device.
+    private func selectDevice() throws {
+        let device = preferredDeviceMatch.flatMap { MacAudioDevices.input(matching: $0) }
+            ?? MacAudioDevices.defaultInput()
+        guard let device else { throw InputError.noInputAvailable }
+
+        guard let unit = engine.inputNode.audioUnit else {
+            throw InputError.noInputAvailable
+        }
+        var id = device.id
+        let status = AudioUnitSetProperty(unit,
+                                          kAudioOutputUnitProperty_CurrentDevice,
+                                          kAudioUnitScope_Global, 0,
+                                          &id, UInt32(MemoryLayout<AudioDeviceID>.size))
+        guard status == noErr else {
+            throw InputError.deviceSelectionFailed(device.name, status)
+        }
+        selectedDevice = device
+        preferredInputOutcome = "selected \(device.name) [\(device.uid)]"
+    }
+    #endif
 
     /// Build the decoder and tap for whatever the current route offers, and run.
     /// Split out from `start()` because a route change has to redo all of it:
@@ -130,12 +196,29 @@ public final class LTCAudioInput {
         self.decoder = decoder
 
         var runningIndex: Double = 0
+        expectedSampleTime = nil
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, when in
             guard let self, let channel = buffer.floatChannelData else { return }
 
             // Take channel 0 rather than summing: if a stereo source carries the
             // same signal inverted on the other leg, summing would cancel it.
             let samples = UnsafeBufferPointer(start: channel[0], count: Int(buffer.frameLength))
+
+            // The driver numbers every frame it ever captured, so a jump larger
+            // than this buffer is audio that never reached us. Worth counting:
+            // dropped capture looks exactly like a mangled analogue signal —
+            // frames failing to decode for no visible reason — and without this
+            // the two are indistinguishable. It cost a full debugging session
+            // once already.
+            if when.isSampleTimeValid {
+                if let expected = self.expectedSampleTime, when.sampleTime > expected {
+                    let missing = when.sampleTime - expected
+                    self.dropEventCount += 1
+                    self.droppedFrameCount += missing
+                    self.onDrop?(missing)
+                }
+                self.expectedSampleTime = when.sampleTime + Int64(buffer.frameLength)
+            }
 
             self.bufferStartSampleIndex = runningIndex
             self.bufferStartHostTime = AVAudioTime.seconds(forHostTime: when.hostTime)
@@ -165,11 +248,14 @@ public final class LTCAudioInput {
         }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false)
+        #endif
         isRunning = false
     }
 
     // MARK: - Route changes
+    #if os(iOS)
 
     /// The timecode cable is normally plugged in *after* the app is already
     /// listening. Without this, the session keeps the built-in mic and the
@@ -214,15 +300,43 @@ public final class LTCAudioInput {
 
     /// Prefer a wired or USB input over the built-in microphone, since that is
     /// where the timecode will be arriving.
+    ///
+    /// The outcome is recorded rather than discarded. When the phone stays on
+    /// the built-in microphone with a timecode interface plugged in, the whole
+    /// question is *which* of these steps failed — whether the interface was
+    /// absent from `availableInputs` altogether, or was found and refused — and
+    /// a bare `try?` throws that distinction away.
     private func preferExternalInput(session: AVAudioSession) {
-        guard let inputs = session.availableInputs else { return }
+        guard let inputs = session.availableInputs, !inputs.isEmpty else {
+            preferredInputOutcome = "no availableInputs (session inactive or not a recording category)"
+            return
+        }
         let preferredOrder: [AVAudioSession.Port] = [.usbAudio, .headsetMic, .lineIn]
         for port in preferredOrder {
             if let match = inputs.first(where: { $0.portType == port }) {
-                try? session.setPreferredInput(match)
+                do {
+                    try session.setPreferredInput(match)
+                    preferredInputOutcome = "requested \(match.portName) [\(match.portType.rawValue)]"
+                } catch {
+                    preferredInputOutcome = "setPreferredInput(\(match.portName)) FAILED: \(error.localizedDescription)"
+                }
                 return
             }
         }
+        preferredInputOutcome = "no external input offered; only "
+            + inputs.map(\.portType.rawValue).joined(separator: ", ")
+    }
+
+    /// Current state plus the two things only this object knows: the engine's
+    /// negotiated input format, and what the last attempt to select an external
+    /// input actually did.
+    public func diagnostics() -> AudioDiagnostics {
+        var d = AudioDiagnostics.current()
+        d.preferredInputOutcome = preferredInputOutcome
+        if isRunning {
+            d.engineInputFormat = engine.inputNode.inputFormat(forBus: 0).description
+        }
+        return d
     }
 
     /// Human-readable description of the current input, for the UI.
@@ -238,5 +352,24 @@ public final class LTCAudioInput {
         guard let input = route.inputs.first else { return false }
         return input.portType != .builtInMic
     }
+    #else
+
+    /// Human-readable description of the current input, for the UI.
+    public var currentInputDescription: String {
+        selectedDevice?.name ?? "No input"
+    }
+
+    /// True when capturing from something other than the Mac's own microphone.
+    /// Heuristic — CoreAudio has no "built-in" flag — but good enough for a
+    /// harness, where the device was named explicitly anyway.
+    public var isExternalInputConnected: Bool {
+        guard let device = selectedDevice else { return false }
+        return !device.uid.hasPrefix("BuiltIn")
+    }
+
+    /// The input latency a jam has to subtract for the selected device.
+    public var latencyBudget: InputLatencyBudget? {
+        selectedDevice.map { MacAudioDevices.latencyBudget($0.id) }
+    }
+    #endif
 }
-#endif
