@@ -119,18 +119,31 @@ struct SlateFace: View {
             .accessibilityAddTraits(.isButton)
     }
 
+    /// No caption. Eight red digits in a slate's largest cell are not something
+    /// anyone needs told are timecode, and the word cost the numbers a fifth of
+    /// their height. The rate goes in the corner, where it is available without
+    /// being in the way — and doubles as the marker for the user-bits phase,
+    /// which is the one time the digits are *not* timecode.
     private func timecode(u: CGFloat) -> some View {
-        VStack(spacing: 0.4 * u) {
-            label(showingUserBits ? "User bits" : "Timecode · \(model.rate.displayName)", u: u)
+        ZStack {
             Text(showingUserBits ? model.userBitsDisplay : model.displayTimecode)
-                .font(.system(size: 23 * u, weight: .bold, design: .monospaced))
+                .font(.system(size: 26 * u, weight: .bold, design: .monospaced))
                 .monospacedDigit()
                 .minimumScaleFactor(0.4)
                 .lineLimit(1)
                 .foregroundStyle(timecodeColor)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            HStack {
+                Spacer()
+                Text(showingUserBits ? "USER BITS" : "\(model.rate.displayName) FPS")
+                    .font(.system(size: 3 * u, weight: .semibold))
+                    .tracking(3 * u * 0.16)
+                    .foregroundStyle(Self.inkFaint)
+                    .fixedSize()
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 3 * u)
+        .padding(.horizontal, 2.5 * u)
         .padding(.vertical, 0.5 * u)
     }
 
